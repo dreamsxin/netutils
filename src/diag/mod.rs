@@ -255,16 +255,37 @@ fn check_proxy_status() -> DiagItem {
     }
 }
 
-/// 检测单个 URL 的 HTTP 连通性
+/// 检测单个 URL 的 HTTP 连通性（自动检测并使用系统代理）
 async fn check_http_single(url: &str) -> DiagItem {
     let is_cn = url.contains("baidu.com");
     let check_label = if is_cn { "http_cn" } else { "http_global" };
-    // 国际站点超时缩短，避免长时间等待被墙的请求
-    let timeout_secs = if is_cn { 5 } else { 3 };
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
-        .build()
-        .unwrap();
+    let timeout_secs = if is_cn { 5 } else { 5 };
+
+    // 检测系统代理
+    let proxy_addr = crate::util::get_system_proxy_addr();
+    let via_proxy = proxy_addr.is_some();
+
+    // 构建 client：有系统代理则显式使用，否则直连
+    let client = if let Some(ref proxy_url) = proxy_addr {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .proxy(reqwest::Proxy::all(proxy_url).unwrap_or_else(|_| {
+                reqwest::Proxy::all("http://0.0.0.0:0").unwrap()
+            }))
+            .build()
+            .unwrap_or_else(|_| {
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(timeout_secs))
+                    .build()
+                    .unwrap()
+            })
+    } else {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .no_proxy()
+            .build()
+            .unwrap()
+    };
 
     let start = Instant::now();
 
@@ -272,10 +293,19 @@ async fn check_http_single(url: &str) -> DiagItem {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-            let msg = t("diag.http_ok")
-                .replace("{0}", url)
-                .replace("{1}", &status.to_string())
-                .replace("{2}", &format!("{:.0}", elapsed));
+            let proxy_tag = if via_proxy {
+                t("diag.via_proxy")
+            } else {
+                t("diag.direct")
+            };
+            let msg = format!(
+                "{} [{}]",
+                t("diag.http_ok")
+                    .replace("{0}", url)
+                    .replace("{1}", &status.to_string())
+                    .replace("{2}", &format!("{:.0}", elapsed)),
+                proxy_tag
+            );
             DiagItem {
                 check: format!("{} ({})", t(check_label), url),
                 ok: true,
@@ -283,12 +313,24 @@ async fn check_http_single(url: &str) -> DiagItem {
                 message: msg,
             }
         }
-        Err(e) => DiagItem {
-            check: format!("{} ({})", t(check_label), url),
-            ok: false,
-            warning: false,
-            message: t1("diag.http_fail", &e.to_string()),
-        },
+        Err(e) => {
+            let proxy_tag = if via_proxy {
+                t("diag.via_proxy")
+            } else {
+                t("diag.direct")
+            };
+            let msg = format!(
+                "{} [{}]",
+                t1("diag.http_fail", &e.to_string()),
+                proxy_tag
+            );
+            DiagItem {
+                check: format!("{} ({})", t(check_label), url),
+                ok: false,
+                warning: false,
+                message: msg,
+            }
+        }
     }
 }
 

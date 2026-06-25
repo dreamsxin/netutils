@@ -59,7 +59,7 @@ pub fn get_proxy_info() -> Vec<ProxyEntry> {
 }
 
 #[cfg(target_os = "windows")]
-fn get_windows_system_proxy() -> Option<String> {
+pub fn get_windows_system_proxy() -> Option<String> {
     use winreg::enums::*;
     use winreg::RegKey;
 

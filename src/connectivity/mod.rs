@@ -170,12 +170,20 @@ async fn run_tcp(target: &str, count: u32, mode: OutputMode) {
     print_stats(&stats, false);
 }
 
-/// HTTP 连通性测试
+/// HTTP 连通性测试（自动检测并使用系统代理）
 async fn run_http(url: &str, count: u32, mode: OutputMode) {
-    let client = reqwest::Client::builder()
-        .timeout(CONNECT_TIMEOUT)
-        .build()
-        .unwrap();
+    let proxy_addr = crate::util::get_system_proxy_addr();
+    let mut builder = reqwest::Client::builder().timeout(CONNECT_TIMEOUT);
+
+    if let Some(ref proxy_url) = proxy_addr {
+        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    } else {
+        builder = builder.no_proxy();
+    }
+
+    let client = builder.build().unwrap();
 
     let mut probes = Vec::new();
 

@@ -55,6 +55,51 @@ pub fn fmt_ms(ms: f64) -> String {
     format!("{:.2}ms", ms)
 }
 
+/// 获取系统代理地址（Windows 注册表 或 环境变量）
+/// 返回格式化的代理 URL，如 "http://127.0.0.1:7897"
+pub fn get_system_proxy_addr() -> Option<String> {
+    // 1. Windows 注册表系统代理
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(proxy) = crate::info::proxy::get_windows_system_proxy() {
+            // ProxyServer 格式可能是 "http=...;https=..." 或 "host:port"
+            for part in proxy.split(';') {
+                let part = part.trim();
+                if let Some(addr) = part.strip_prefix("https=") {
+                    return Some(format_proxy_url(addr));
+                }
+                if let Some(addr) = part.strip_prefix("http=") {
+                    return Some(format_proxy_url(addr));
+                }
+            }
+            // 没有协议前缀，整体作为 host:port
+            if !proxy.contains('=') {
+                return Some(format_proxy_url(&proxy));
+            }
+        }
+    }
+
+    // 2. 环境变量
+    for var in &["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+        if let Ok(val) = std::env::var(var) {
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+
+    None
+}
+
+/// 将代理地址格式化为完整 URL
+fn format_proxy_url(addr: &str) -> String {
+    if addr.starts_with("http://") || addr.starts_with("https://") || addr.starts_with("socks") {
+        addr.to_string()
+    } else {
+        format!("http://{}", addr)
+    }
+}
+
 /// 解析端口列表字符串，支持逗号分隔和范围语法
 ///
 /// "80,443,8080" → [80, 443, 8080]

@@ -263,6 +263,8 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         ("diag.http_fail", "HTTPS 连通失败 ({0})", "HTTPS failed ({0})"),
         ("diag.http_cn", "国内连通", "Domestic HTTP"),
         ("diag.http_global", "国际连通", "Global HTTP"),
+        ("diag.via_proxy", "经代理", "via proxy"),
+        ("diag.direct", "直连", "direct"),
         ("diag.ipv6_ok", "IPv6 可用", "IPv6 available"),
         ("diag.ipv6_fail", "IPv6 不可用", "IPv6 unavailable"),
     ];
