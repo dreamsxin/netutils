@@ -28,30 +28,27 @@ pub struct DiagReport {
 /// 执行一键诊断
 pub async fn run(mode: OutputMode) {
     let start = Instant::now();
+
+    // 全部并行执行，取最慢的一个的耗时
+    let (egress, dns_cn, dns_global, gateway, proxy, http_cn, http_global, ipv6) = tokio::join!(
+        check_egress(),
+        check_dns_single("baidu.com"),
+        check_dns_single("google.com"),
+        check_gateway(),
+        async { check_proxy_status() },
+        check_http_single("https://www.baidu.com"),
+        check_http_single("https://www.google.com"),
+        check_ipv6(),
+    );
+
     let mut items = Vec::new();
-
-    // 1. 检测出口
-    let egress = check_egress().await;
     items.push(egress);
-
-    // 2. DNS 检测
-    let dns = check_dns().await;
-    items.push(dns);
-
-    // 3. 网关可达性
-    let gateway = check_gateway().await;
+    items.push(dns_cn);
+    items.push(dns_global);
     items.push(gateway);
-
-    // 4. 代理状态
-    let proxy = check_proxy_status();
     items.push(proxy);
-
-    // 5. HTTP 连通性
-    let http = check_http().await;
-    items.push(http);
-
-    // 6. IPv6 检测
-    let ipv6 = check_ipv6().await;
+    items.push(http_cn);
+    items.push(http_global);
     items.push(ipv6);
 
     let elapsed = start.elapsed();
@@ -92,7 +89,7 @@ pub async fn run(mode: OutputMode) {
     }
 
     println!();
-    println!("  {}", t("diag.elapsed").replace("{0:.1}", &format!("{:.1}", elapsed.as_secs_f64())));
+    println!("  {}", t("diag.elapsed").replace("{0}", &format!("{:.1}", elapsed.as_secs_f64())));
 }
 
 /// 检测出口
@@ -123,38 +120,41 @@ async fn check_egress() -> DiagItem {
     }
 }
 
-/// 检测 DNS
-async fn check_dns() -> DiagItem {
+/// 检测单个域名的 DNS 解析
+async fn check_dns_single(domain: &str) -> DiagItem {
     use trust_dns_resolver::config::*;
     use trust_dns_resolver::TokioAsyncResolver;
 
+    let is_cn = domain == "baidu.com";
+    let check_label = if is_cn { "dns_cn" } else { "dns_global" };
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
     let start = Instant::now();
 
-    match resolver.lookup_ip("baidu.com").await {
+    match resolver.lookup_ip(domain).await {
         Ok(ips) => {
             if let Some(ip) = ips.iter().next() {
                 let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                let msg = t("diag.dns_ok")
+                    .replace("{0}", domain)
+                    .replace("{1}", &ip.to_string())
+                    .replace("{2}", &format!("{:.0}", elapsed));
                 DiagItem {
-                    check: "dns".to_string(),
+                    check: format!("{} ({})", t(check_label), domain),
                     ok: true,
                     warning: false,
-                    message: t("diag.dns_ok")
-                        .replace("{0}", "baidu.com")
-                        .replace("{1}", &ip.to_string())
-                        .replace("{2}", &format!("{:.0}", elapsed)),
+                    message: msg,
                 }
             } else {
                 DiagItem {
-                    check: "dns".to_string(),
+                    check: format!("{} ({})", t(check_label), domain),
                     ok: false,
                     warning: false,
-                    message: t1("diag.dns_fail", "baidu.com"),
+                    message: t1("diag.dns_fail", domain),
                 }
             }
         }
         Err(e) => DiagItem {
-            check: "dns".to_string(),
+            check: format!("{} ({})", t(check_label), domain),
             ok: false,
             warning: false,
             message: t1("diag.dns_fail", &e.to_string()),
@@ -255,32 +255,36 @@ fn check_proxy_status() -> DiagItem {
     }
 }
 
-/// 检测 HTTP 连通性
-async fn check_http() -> DiagItem {
+/// 检测单个 URL 的 HTTP 连通性
+async fn check_http_single(url: &str) -> DiagItem {
+    let is_cn = url.contains("baidu.com");
+    let check_label = if is_cn { "http_cn" } else { "http_global" };
+    // 国际站点超时缩短，避免长时间等待被墙的请求
+    let timeout_secs = if is_cn { 5 } else { 3 };
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(timeout_secs))
         .build()
         .unwrap();
 
-    let url = "https://www.baidu.com";
     let start = Instant::now();
 
     match client.get(url).send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            let msg = t("diag.http_ok")
+                .replace("{0}", url)
+                .replace("{1}", &status.to_string())
+                .replace("{2}", &format!("{:.0}", elapsed));
             DiagItem {
-                check: "http".to_string(),
+                check: format!("{} ({})", t(check_label), url),
                 ok: true,
                 warning: false,
-                message: t("diag.http_ok")
-                    .replace("{0}", url)
-                    .replace("{1}", &status.to_string())
-                    .replace("{2}", &format!("{:.0}", elapsed)),
+                message: msg,
             }
         }
         Err(e) => DiagItem {
-            check: "http".to_string(),
+            check: format!("{} ({})", t(check_label), url),
             ok: false,
             warning: false,
             message: t1("diag.http_fail", &e.to_string()),

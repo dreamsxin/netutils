@@ -252,6 +252,8 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         ("diag.net_fail", "无网络连接", "No network connection"),
         ("diag.dns_ok", "DNS 解析正常 ({0} → {1}, {2}ms)", "DNS OK ({0} → {1}, {2}ms)"),
         ("diag.dns_fail", "DNS 解析失败 ({0})", "DNS failed ({0})"),
+        ("diag.dns_cn", "国内 DNS", "Domestic DNS"),
+        ("diag.dns_global", "国际 DNS", "Global DNS"),
         ("diag.gw_ok", "默认网关可达 ({0}, {1}ms)", "Gateway reachable ({0}, {1}ms)"),
         ("diag.gw_ok_no_rtt", "默认网关存在 ({0})", "Gateway found ({0})"),
         ("diag.gw_fail", "默认网关不可达", "Gateway unreachable"),
@@ -259,6 +261,8 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         ("diag.proxy_off", "系统代理未启用", "System proxy disabled"),
         ("diag.http_ok", "HTTPS 连通正常 ({0} → {1}, {2}ms)", "HTTPS OK ({0} → {1}, {2}ms)"),
         ("diag.http_fail", "HTTPS 连通失败 ({0})", "HTTPS failed ({0})"),
+        ("diag.http_cn", "国内连通", "Domestic HTTP"),
+        ("diag.http_global", "国际连通", "Global HTTP"),
         ("diag.ipv6_ok", "IPv6 可用", "IPv6 available"),
         ("diag.ipv6_fail", "IPv6 不可用", "IPv6 unavailable"),
     ];
