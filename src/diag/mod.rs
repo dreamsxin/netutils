@@ -85,7 +85,7 @@ pub async fn run(mode: OutputMode) {
         } else {
             symbol.red()
         };
-        println!("  {} {}", colored, item.message);
+        println!("  {} [{}] {}", colored, item.check, item.message);
     }
 
     println!();
@@ -105,14 +105,14 @@ async fn check_egress() -> DiagItem {
                 .map(|i| crate::info::interface::classify_interface(&i.description, &i.name).to_label())
                 .unwrap_or_default();
             DiagItem {
-                check: "egress".to_string(),
+                check: t("diag.check_egress"),
                 ok: true,
                 warning: false,
                 message: t2("diag.net_ok", &name, &format!("({}) {}", iftype, ip)),
             }
         }
         _ => DiagItem {
-            check: "egress".to_string(),
+            check: t("diag.check_egress"),
             ok: false,
             warning: false,
             message: t("diag.net_fail"),
@@ -126,7 +126,7 @@ async fn check_dns_single(domain: &str) -> DiagItem {
     use trust_dns_resolver::TokioAsyncResolver;
 
     let is_cn = domain == "baidu.com";
-    let check_label = if is_cn { "dns_cn" } else { "dns_global" };
+    let check_label = if is_cn { "diag.dns_cn" } else { "diag.dns_global" };
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
     let start = Instant::now();
 
@@ -139,14 +139,14 @@ async fn check_dns_single(domain: &str) -> DiagItem {
                     .replace("{1}", &ip.to_string())
                     .replace("{2}", &format!("{:.0}", elapsed));
                 DiagItem {
-                    check: format!("{} ({})", t(check_label), domain),
+                    check: t(check_label),
                     ok: true,
                     warning: false,
                     message: msg,
                 }
             } else {
                 DiagItem {
-                    check: format!("{} ({})", t(check_label), domain),
+                    check: t(check_label),
                     ok: false,
                     warning: false,
                     message: t1("diag.dns_fail", domain),
@@ -154,7 +154,7 @@ async fn check_dns_single(domain: &str) -> DiagItem {
             }
         }
         Err(e) => DiagItem {
-            check: format!("{} ({})", t(check_label), domain),
+            check: t(check_label),
             ok: false,
             warning: false,
             message: t1("diag.dns_fail", &e.to_string()),
@@ -167,7 +167,7 @@ async fn check_gateway() -> DiagItem {
     let routes = crate::info::get_default_routes();
     if routes.is_empty() {
         return DiagItem {
-            check: "gateway".to_string(),
+            check: t("diag.check_gateway"),
             ok: false,
             warning: false,
             message: t("diag.gw_fail"),
@@ -178,7 +178,7 @@ async fn check_gateway() -> DiagItem {
     let gw_addr: std::net::IpAddr = match gw_ip.parse() {
         Ok(ip) => ip,
         Err(_) => return DiagItem {
-            check: "gateway".to_string(),
+            check: t("diag.check_gateway"),
             ok: false,
             warning: false,
             message: t("diag.gw_fail"),
@@ -190,7 +190,7 @@ async fn check_gateway() -> DiagItem {
     let client = match Client::new(&ConfigBuilder::default().build()) {
         Ok(c) => c,
         Err(_) => return DiagItem {
-            check: "gateway".to_string(),
+            check: t("diag.check_gateway"),
             ok: true,
             warning: true,
             message: t1("diag.gw_ok_no_rtt", gw_ip),
@@ -202,14 +202,14 @@ async fn check_gateway() -> DiagItem {
         Ok((_, rtt)) => {
             let ms = rtt.as_secs_f64() * 1000.0;
             DiagItem {
-                check: "gateway".to_string(),
+                check: t("diag.check_gateway"),
                 ok: true,
                 warning: false,
                 message: t2("diag.gw_ok", gw_ip, &format!("{:.1}", ms)),
             }
         }
         Err(_) => DiagItem {
-            check: "gateway".to_string(),
+            check: t("diag.check_gateway"),
             ok: false,
             warning: false,
             message: t("diag.gw_fail"),
@@ -241,13 +241,13 @@ fn check_proxy_status() -> DiagItem {
 
     match proxy_value {
         Some(val) => DiagItem {
-            check: "proxy".to_string(),
+            check: t("diag.check_proxy"),
             ok: true,
             warning: true,
             message: t1("diag.proxy_on", &val),
         },
         None => DiagItem {
-            check: "proxy".to_string(),
+            check: t("diag.check_proxy"),
             ok: true,
             warning: false,
             message: t("diag.proxy_off"),
@@ -258,8 +258,8 @@ fn check_proxy_status() -> DiagItem {
 /// 检测单个 URL 的 HTTP 连通性（自动检测并使用系统代理）
 async fn check_http_single(url: &str) -> DiagItem {
     let is_cn = url.contains("baidu.com");
-    let check_label = if is_cn { "http_cn" } else { "http_global" };
-    let timeout_secs = if is_cn { 5 } else { 5 };
+    let check_label = if is_cn { "diag.http_cn" } else { "diag.http_global" };
+    let timeout_secs = 5;
 
     // 检测系统代理
     let proxy_addr = crate::util::get_system_proxy_addr();
@@ -307,7 +307,7 @@ async fn check_http_single(url: &str) -> DiagItem {
                 proxy_tag
             );
             DiagItem {
-                check: format!("{} ({})", t(check_label), url),
+                check: t(check_label),
                 ok: true,
                 warning: false,
                 message: msg,
@@ -325,7 +325,7 @@ async fn check_http_single(url: &str) -> DiagItem {
                 proxy_tag
             );
             DiagItem {
-                check: format!("{} ({})", t(check_label), url),
+                check: t(check_label),
                 ok: false,
                 warning: false,
                 message: msg,
@@ -345,14 +345,14 @@ async fn check_ipv6() -> DiagItem {
         Ok(ips) => {
             if ips.iter().next().is_some() {
                 DiagItem {
-                    check: "ipv6".to_string(),
+                    check: t("diag.check_ipv6"),
                     ok: true,
                     warning: false,
                     message: t("diag.ipv6_ok"),
                 }
             } else {
                 DiagItem {
-                    check: "ipv6".to_string(),
+                    check: t("diag.check_ipv6"),
                     ok: false,
                     warning: false,
                     message: t("diag.ipv6_fail"),
@@ -360,7 +360,7 @@ async fn check_ipv6() -> DiagItem {
             }
         }
         Err(_) => DiagItem {
-            check: "ipv6".to_string(),
+            check: t("diag.check_ipv6"),
             ok: false,
             warning: false,
             message: t("diag.ipv6_fail"),

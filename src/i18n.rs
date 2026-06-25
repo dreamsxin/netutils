@@ -248,6 +248,10 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         // ── diag ──
         ("diag.title", "🔍 网络诊断报告", "🔍 Network Diagnostics"),
         ("diag.elapsed", "诊断耗时: {0}s", "Time: {0}s"),
+        ("diag.check_egress", "出口", "Egress"),
+        ("diag.check_gateway", "网关", "Gateway"),
+        ("diag.check_proxy", "代理", "Proxy"),
+        ("diag.check_ipv6", "IPv6", "IPv6"),
         ("diag.net_ok", "网络连接正常 (出口: {0} {1})", "Network connected (egress: {0} {1})"),
         ("diag.net_fail", "无网络连接", "No network connection"),
         ("diag.dns_ok", "DNS 解析正常 ({0} → {1}, {2}ms)", "DNS OK ({0} → {1}, {2}ms)"),
