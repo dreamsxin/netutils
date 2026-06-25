@@ -460,6 +460,7 @@ name = "netutils"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "socket2",
  "surge-ping",
  "tokio",
  "trust-dns-resolver",

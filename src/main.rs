@@ -3,6 +3,7 @@ mod dns;
 mod info;
 mod ping;
 mod table;
+mod traceroute;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -19,5 +20,6 @@ async fn main() {
         Some(Commands::Proxy) => info::print_proxy(),
         Some(Commands::Ping { host, count }) => ping::run(&host, count).await,
         Some(Commands::Dns { domain, r#type }) => dns::run(&domain, r#type).await,
+        Some(Commands::Trace { host }) => traceroute::run(&host).await,
     }
 }

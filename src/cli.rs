@@ -40,4 +40,9 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value_t = DnsRecordType::A)]
         r#type: DnsRecordType,
     },
+    /// 路由追踪（TTL 递增）
+    Trace {
+        /// 目标主机名或 IP
+        host: String,
+    },
 }
