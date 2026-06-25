@@ -1,0 +1,11 @@
+[package]
+name = "network-tools"
+version = "0.1.0"
+edition = "2021"
+description = "本地网络检测工具"
+
+[dependencies]
+unicode-width = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
