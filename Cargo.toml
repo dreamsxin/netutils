@@ -1,10 +1,10 @@
 [package]
 name = "netutils-cli"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "本地网络检测工具集：网络接口、路由、出口、代理检测，Ping、DNS、Traceroute、端口扫描、连通性测试"
 license = "MIT"
-repository = "https://github.com/user/netutils-cli"
+repository = "https://github.com/dreamsxin/netutils-cli"
 keywords = ["network", "cli", "ping", "dns", "traceroute"]
 categories = ["command-line-utilities", "network-programming"]
 
