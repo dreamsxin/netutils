@@ -1,9 +1,10 @@
 //! 路由表信息模块。
 
+use serde::Serialize;
 use std::process::Command;
 
 /// 路由条目
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RouteEntry {
     pub destination: String,
     pub gateway: String,

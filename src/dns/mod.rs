@@ -1,25 +1,24 @@
 //! DNS 查询模块：支持 A/AAAA/MX/CNAME/NS/TXT 记录。
 
+use colored::*;
+use serde::Serialize;
+
+use crate::i18n::t;
+use crate::output::{print_json, OutputMode};
 use crate::table::print_table;
+
 use trust_dns_resolver::config::*;
-use trust_dns_resolver::lookup::Lookup;
 use trust_dns_resolver::proto::rr::{RecordType, RData};
 use trust_dns_resolver::TokioAsyncResolver;
 
 /// DNS 记录类型
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum DnsRecordType {
-    /// IPv4 地址
     A,
-    /// IPv6 地址
     Aaaa,
-    /// 邮件交换
     Mx,
-    /// 别名记录
     Cname,
-    /// 域名服务器
     Ns,
-    /// 文本记录
     Txt,
 }
 
@@ -36,11 +35,23 @@ impl DnsRecordType {
     }
 }
 
-/// 执行 DNS 查询并输出结果
-pub async fn run(domain: &str, record_type: DnsRecordType) {
-    println!();
-    println!("🔍 DNS 查询: {} ({:?})", domain, record_type);
+/// DNS 查询结果
+#[derive(Serialize)]
+pub struct DnsOutput {
+    pub domain: String,
+    pub record_type: String,
+    pub records: Vec<DnsRecord>,
+    pub elapsed_ms: f64,
+}
 
+#[derive(Serialize, Clone)]
+pub struct DnsRecord {
+    pub value: String,
+    pub ttl: u32,
+}
+
+/// 执行 DNS 查询并输出结果
+pub async fn run(domain: &str, record_type: DnsRecordType, mode: OutputMode) {
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
     let type_str = match record_type {
@@ -57,37 +68,55 @@ pub async fn run(domain: &str, record_type: DnsRecordType) {
     let elapsed = start.elapsed();
 
     match result {
-        Ok(lookup) => {
-            let records: Vec<(&RData, u32)> = lookup
-                .record_iter()
-                .filter_map(|r| r.data().map(|d| (d, r.ttl())))
-                .collect();
+        Ok(records) => {
+            let output = DnsOutput {
+                domain: domain.to_string(),
+                record_type: type_str.to_string(),
+                elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+                records: records.clone(),
+            };
+
+            if mode == OutputMode::Json {
+                print_json(&output);
+                return;
+            }
+
+            // 表格输出
+            println!();
+            println!(
+                "{}",
+                t("dns.title")
+                    .replace("{0}", domain)
+                    .replace("{1}", type_str)
+                    .bold()
+            );
 
             if records.is_empty() {
-                println!("  未找到 {} 记录", type_str);
+                println!("  {}", t("dns.no_record").replace("{0}", type_str));
             } else {
-                let headers = ["序号", "记录值", "TTL"];
+                let h_idx = t("dns.idx");
+                let h_val = t("dns.value");
+                let h_ttl = t("dns.ttl");
+                let headers = [h_idx.as_str(), h_val.as_str(), h_ttl.as_str()];
                 let rows: Vec<Vec<String>> = records
                     .iter()
                     .enumerate()
-                    .map(|(i, (rdata, ttl))| {
-                        vec![
-                            (i + 1).to_string(),
-                            format_record(rdata),
-                            format!("{}s", ttl),
-                        ]
-                    })
+                    .map(|(i, r)| vec![(i + 1).to_string(), r.value.clone(), format!("{}s", r.ttl)])
                     .collect();
                 print_table(&headers, &rows);
             }
+
+            println!();
+            println!("  {}", t("dns.elapsed").replace("{0}", &format!("{:.2}", output.elapsed_ms)));
         }
         Err(e) => {
-            println!("  ❌ 查询失败: {}", e);
+            if mode == OutputMode::Json {
+                println!("{{\"error\": \"{}\"}}", e);
+            } else {
+                println!("  {}", t("dns.fail").replace("{0}", &e).red());
+            }
         }
     }
-
-    println!();
-    println!("  查询耗时: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
 }
 
 /// 查询指定类型的 DNS 记录
@@ -95,12 +124,19 @@ async fn query_record(
     resolver: &TokioAsyncResolver,
     domain: &str,
     record_type: DnsRecordType,
-) -> Result<Lookup, String> {
+) -> Result<Vec<DnsRecord>, String> {
     let rt = record_type.to_record_type();
-    resolver
-        .lookup(domain, rt)
-        .await
-        .map_err(|e| e.to_string())
+    let lookup = resolver.lookup(domain, rt).await.map_err(|e| e.to_string())?;
+
+    let records: Vec<DnsRecord> = lookup
+        .record_iter()
+        .filter_map(|r| r.data().map(|d| DnsRecord {
+            value: format_record(d),
+            ttl: r.ttl(),
+        }))
+        .collect();
+
+    Ok(records)
 }
 
 /// 格式化 DNS 记录为字符串

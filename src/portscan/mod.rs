@@ -3,54 +3,58 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use colored::*;
+use serde::Serialize;
+
+use crate::i18n::{t, t1, t2};
+use crate::output::{print_json, OutputMode};
+use crate::table::print_table;
+
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use crate::table::print_table;
-
-/// 单次连接超时
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
-/// 最大并发数
 const MAX_CONCURRENT: usize = 100;
 
-/// 常见端口与服务名映射
 const COMMON_PORTS: &[(u16, &str)] = &[
-    (21, "FTP"),
-    (22, "SSH"),
-    (23, "Telnet"),
-    (25, "SMTP"),
-    (53, "DNS"),
-    (80, "HTTP"),
-    (110, "POP3"),
-    (143, "IMAP"),
-    (443, "HTTPS"),
-    (445, "SMB"),
-    (993, "IMAPS"),
-    (995, "POP3S"),
-    (1433, "SQL Server"),
-    (3306, "MySQL"),
-    (3389, "RDP"),
-    (5432, "PostgreSQL"),
-    (6379, "Redis"),
-    (8080, "HTTP Alt"),
-    (8443, "HTTPS Alt"),
-    (9090, "Prometheus"),
+    (21, "FTP"), (22, "SSH"), (23, "Telnet"), (25, "SMTP"),
+    (53, "DNS"), (80, "HTTP"), (110, "POP3"), (143, "IMAP"),
+    (443, "HTTPS"), (445, "SMB"), (993, "IMAPS"), (995, "POP3S"),
+    (1433, "SQL Server"), (3306, "MySQL"), (3389, "RDP"),
+    (5432, "PostgreSQL"), (6379, "Redis"), (8080, "HTTP Alt"),
+    (8443, "HTTPS Alt"), (9090, "Prometheus"),
 ];
 
-/// 执行端口扫描并输出结果
-///
-/// - `host`: 目标主机
-/// - `ports`: 端口列表，None 则扫描常见端口
-pub async fn run(host: &str, ports: Option<&[u16]>) {
-    println!();
-    println!("🔎 端口扫描: {}", host);
+/// 单个端口扫描结果
+#[derive(Serialize, Clone)]
+pub struct PortResult {
+    pub port: u16,
+    pub open: bool,
+    pub service: String,
+}
 
+/// 端口扫描完整输出
+#[derive(Serialize)]
+pub struct ScanOutput {
+    pub host: String,
+    pub target: String,
+    pub total_scanned: usize,
+    pub open_count: usize,
+    pub results: Vec<PortResult>,
+}
+
+/// 执行端口扫描并输出结果
+pub async fn run(host: &str, ports: Option<&[u16]>, mode: OutputMode) {
     // 解析主机
     let target = match resolve_host(host).await {
         Some(ip) => ip,
         None => {
-            println!("  ❌ 无法解析主机: {}", host);
+            if mode == OutputMode::Json {
+                println!("{{\"error\": \"{}\"}}", t1("scan.resolve_fail", host));
+            } else {
+                println!("  {}", t1("scan.resolve_fail", host).red());
+            }
             return;
         }
     };
@@ -60,16 +64,12 @@ pub async fn run(host: &str, ports: Option<&[u16]>) {
         None => COMMON_PORTS.iter().map(|(p, _)| *p).collect(),
     };
 
-    println!("  目标: {} ({})", host, target);
-    println!("  扫描 {} 个端口，并发 {}", port_list.len(), MAX_CONCURRENT);
-    println!();
-
     let semaphore = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT));
     let mut handles = Vec::new();
 
-    for port in port_list {
+    for port in &port_list {
         let permit = semaphore.clone();
-        let target = target;
+        let port = *port;
         handles.push(tokio::spawn(async move {
             let _permit = permit.acquire_owned().await.unwrap();
             scan_port(target, port).await
@@ -83,22 +83,47 @@ pub async fn run(host: &str, ports: Option<&[u16]>) {
         }
     }
 
-    // 按端口排序
     results.sort_by_key(|r| r.port);
 
-    // 只显示开放的端口
-    let open: Vec<&ScanResult> = results.iter().filter(|r| r.open).collect();
+    let open_count = results.iter().filter(|r| r.open).count();
+    let output = ScanOutput {
+        host: host.to_string(),
+        target: target.to_string(),
+        total_scanned: results.len(),
+        open_count,
+        results: results.clone(),
+    };
+
+    if mode == OutputMode::Json {
+        print_json(&output);
+        return;
+    }
+
+    // 表格输出
+    println!();
+    println!("{}", t1("scan.title", host).bold());
+    println!("  {}", t2("scan.target", host, &target.to_string()));
+    println!(
+        "  {}",
+        t2("scan.info", &port_list.len().to_string(), &MAX_CONCURRENT.to_string())
+    );
+    println!();
+
+    let open: Vec<&PortResult> = results.iter().filter(|r| r.open).collect();
 
     if open.is_empty() {
-        println!("  未发现开放端口");
+        println!("  {}", t("scan.no_open").yellow());
     } else {
-        let headers = ["端口", "状态", "服务"];
+        let h_port = t("scan.port");
+        let h_state = t("scan.state");
+        let h_svc = t("scan.service");
+        let headers = [h_port.as_str(), h_state.as_str(), h_svc.as_str()];
         let rows: Vec<Vec<String>> = open
             .iter()
             .map(|r| {
                 vec![
                     r.port.to_string(),
-                    "open".to_string(),
+                    "open".green().to_string(),
                     r.service.to_string(),
                 ]
             })
@@ -108,21 +133,13 @@ pub async fn run(host: &str, ports: Option<&[u16]>) {
 
     println!();
     println!(
-        "  扫描完成: {}/{} 开放",
-        open.len(),
-        results.len()
+        "  {}",
+        t2("scan.done", &open_count.to_string(), &results.len().to_string())
     );
 }
 
-/// 扫描结果
-struct ScanResult {
-    port: u16,
-    open: bool,
-    service: &'static str,
-}
-
 /// 扫描单个端口
-async fn scan_port(target: IpAddr, port: u16) -> ScanResult {
+async fn scan_port(target: IpAddr, port: u16) -> PortResult {
     let addr = format!("{}:{}", target, port);
     let result = timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await;
 
@@ -133,10 +150,10 @@ async fn scan_port(target: IpAddr, port: u16) -> ScanResult {
         .map(|(_, s)| *s)
         .unwrap_or("unknown");
 
-    ScanResult {
+    PortResult {
         port,
         open,
-        service,
+        service: service.to_string(),
     }
 }
 

@@ -4,39 +4,56 @@ use std::mem::MaybeUninit;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use socket2::{Domain, Protocol, Socket, Type};
+use colored::*;
+use serde::Serialize;
 
+use crate::i18n::{t, t1, t2};
+use crate::output::{print_json, OutputMode};
 use crate::table::print_table;
+
+use socket2::{Domain, Protocol, Socket, Type};
 
 const MAX_HOPS: u32 = 30;
 const PROBES_PER_HOP: u32 = 3;
 const TIMEOUT: Duration = Duration::from_secs(2);
 
-/// 单跳探测结果
-struct HopResult {
-    ttl: u32,
-    /// 每次探测的 (IP, 延迟)，None 表示超时
-    probes: Vec<Option<(IpAddr, Duration)>>,
-    reached: bool,
+/// 单次探测结果
+#[derive(Serialize, Clone)]
+pub struct Probe {
+    pub ip: Option<String>,
+    pub rtt_ms: Option<f64>,
+}
+
+/// 单跳结果
+#[derive(Serialize, Clone)]
+pub struct Hop {
+    pub ttl: u32,
+    pub probes: Vec<Probe>,
+    pub reached: bool,
+}
+
+/// Traceroute 完整输出
+#[derive(Serialize)]
+pub struct TraceOutput {
+    pub host: String,
+    pub target: String,
+    pub hops: Vec<Hop>,
 }
 
 /// 执行 traceroute 并输出结果
-pub async fn run(host: &str) {
-    println!();
-    println!("🛤️  Traceroute to {}", host);
-
+pub async fn run(host: &str, mode: OutputMode) {
     // 解析主机
     let target = match resolve_host(host).await {
         Some(ip) => ip,
         None => {
-            println!("  ❌ 无法解析主机: {}", host);
+            if mode == OutputMode::Json {
+                println!("{{\"error\": \"{}\"}}", t1("trace.resolve_fail", host));
+            } else {
+                println!("  {}", t1("trace.resolve_fail", host).red());
+            }
             return;
         }
     };
-
-    println!("  目标: {} ({})", host, target);
-    println!("  最大跳数: {}", MAX_HOPS);
-    println!();
 
     let mut hops = Vec::new();
     let mut reached_dest = false;
@@ -52,16 +69,65 @@ pub async fn run(host: &str) {
         }
     }
 
-    print_hops(&hops, host, target);
+    let output = TraceOutput {
+        host: host.to_string(),
+        target: target.to_string(),
+        hops: hops.clone(),
+    };
+
+    if mode == OutputMode::Json {
+        print_json(&output);
+        return;
+    }
+
+    // 表格输出
+    println!();
+    println!("{}", t1("trace.title", host).bold());
+    println!("  {}", t2("trace.target", host, &target.to_string()));
+    println!("  {}", t1("trace.max_hops", &MAX_HOPS.to_string()));
+    println!();
+
+    let h_hop = t("trace.hop");
+    let h_ip = t("trace.ip");
+    let h_p1 = t1("trace.probe", "1");
+    let h_p2 = t1("trace.probe", "2");
+    let h_p3 = t1("trace.probe", "3");
+    let headers = [h_hop.as_str(), h_ip.as_str(), h_p1.as_str(), h_p2.as_str(), h_p3.as_str()];
+
+    let rows: Vec<Vec<String>> = hops
+        .iter()
+        .map(|hop| {
+            let mut row = vec![hop.ttl.to_string()];
+
+            let ip_str = hop
+                .probes
+                .iter()
+                .find_map(|p| p.ip.as_ref().map(|ip| ip.clone()))
+                .unwrap_or_else(|| "*".to_string());
+            row.push(ip_str);
+
+            for i in 0..PROBES_PER_HOP as usize {
+                if let Some(Some(rtt)) = hop.probes.get(i).map(|p| p.rtt_ms) {
+                    row.push(format!("{:.2}ms", rtt));
+                } else {
+                    row.push("*".to_string());
+                }
+            }
+
+            row
+        })
+        .collect();
+
+    print_table(&headers, &rows);
 
     if !reached_dest {
         println!();
-        println!("  ⚠ 未在 {} 跳内到达目标", MAX_HOPS);
+        println!("  {}", t1("trace.not_reached", &MAX_HOPS.to_string()).yellow());
     }
 }
 
-/// 探测单跳：发送 3 个 ICMP Echo Request，TTL 设为指定值
-async fn trace_hop(target: IpAddr, ttl: u32) -> HopResult {
+/// 探测单跳
+async fn trace_hop(target: IpAddr, ttl: u32) -> Hop {
     let mut probes = Vec::new();
     let mut reached = false;
 
@@ -71,13 +137,19 @@ async fn trace_hop(target: IpAddr, ttl: u32) -> HopResult {
                 if ip == target {
                     reached = true;
                 }
-                probes.push(Some((ip, rtt)));
+                probes.push(Probe {
+                    ip: Some(ip.to_string()),
+                    rtt_ms: Some(rtt.as_secs_f64() * 1000.0),
+                });
             }
-            None => probes.push(None),
+            None => probes.push(Probe {
+                ip: None,
+                rtt_ms: None,
+            }),
         }
     }
 
-    HopResult {
+    Hop {
         ttl,
         probes,
         reached,
@@ -85,85 +157,61 @@ async fn trace_hop(target: IpAddr, ttl: u32) -> HopResult {
 }
 
 /// 发送单个 ICMP 探测包并等待响应
-///
-/// 返回 (响应来源 IP, 延迟)，超时返回 None
 async fn send_probe(target: IpAddr, ttl: u32, probe_seq: u32) -> Option<(IpAddr, Duration)> {
     match target {
         IpAddr::V4(addr) => send_probe_v4(addr, ttl, probe_seq).await,
-        IpAddr::V6(_) => None, // IPv6 traceroute 暂不支持
+        IpAddr::V6(_) => None,
     }
 }
 
 /// IPv4 ICMP 探测
 async fn send_probe_v4(target: Ipv4Addr, ttl: u32, probe_seq: u32) -> Option<(IpAddr, Duration)> {
-    // 创建 ICMP socket
     let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).ok()?;
     socket.set_ttl_v4(ttl).ok()?;
     socket.set_read_timeout(Some(TIMEOUT)).ok()?;
 
-    // 构造 ICMP Echo Request
     let ident = (std::process::id() & 0xFFFF) as u16;
     let seq = (probe_seq + ttl * 10) as u16;
     let packet = build_icmp_echo_request(ident, seq);
 
     let start = Instant::now();
-
-    // 发送
     let dest = SocketAddr::new(IpAddr::V4(target), 0);
     socket.send_to(&packet, &dest.into()).ok()?;
 
-    // 接收响应
     let mut buf = [MaybeUninit::new(0); 1024];
     loop {
         match socket.recv_from(&mut buf) {
             Ok((len, from)) => {
                 let from_ip = from.as_socket().map(|s| s.ip())?;
-                // 将 MaybeUninit 转为已初始化切片
                 let data: &[u8] =
                     unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len) };
-                // 解析 IP 头 + ICMP，找到 ICMP Time Exceeded 或 Echo Reply
                 if parse_icmp_response(data, ident, seq).is_some() {
                     return Some((from_ip, start.elapsed()));
                 }
-                // 不是我们的包，继续等待
             }
-            Err(_) => {
-                // 超时
-                return None;
-            }
+            Err(_) => return None,
         }
     }
 }
 
 /// 构造 ICMP Echo Request 包
 fn build_icmp_echo_request(ident: u16, seq: u16) -> Vec<u8> {
-    let mut packet = vec![0u8; 8 + 32]; // ICMP header (8) + payload (32)
-
-    // Type = 8 (Echo Request)
+    let mut packet = vec![0u8; 8 + 32];
     packet[0] = 8;
-    // Code = 0
     packet[1] = 0;
-    // Identifier
     packet[4] = (ident >> 8) as u8;
     packet[5] = (ident & 0xFF) as u8;
-    // Sequence
     packet[6] = (seq >> 8) as u8;
     packet[7] = (seq & 0xFF) as u8;
-
-    // Payload: 填充时间戳数据
     for i in 0..32 {
         packet[8 + i] = i as u8;
     }
-
-    // 计算校验和
     let checksum = icmp_checksum(&packet);
     packet[2] = (checksum >> 8) as u8;
     packet[3] = (checksum & 0xFF) as u8;
-
     packet
 }
 
-/// 计算 ICMP 校验和
 fn icmp_checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
@@ -181,32 +229,18 @@ fn icmp_checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
-/// 解析 ICMP 响应
-///
-/// 返回 Some(()) 如果这是对我们请求的响应（Echo Reply 或 Time Exceeded 中包含我们的包）
 fn parse_icmp_response(buf: &[u8], _ident: u16, _seq: u16) -> Option<()> {
-    // Windows raw socket 接收的数据包含 IP 头
-    // IP 头最小 20 字节
     if buf.len() < 20 {
         return None;
     }
-
-    // 读取 IP 头长度（IHL 字段）
     let ihl = ((buf[0] & 0x0F) * 4) as usize;
     if buf.len() < ihl + 8 {
         return None;
     }
-
-    // ICMP 头
     let icmp_type = buf[ihl];
-    let _icmp_code = buf[ihl + 1];
-
     match icmp_type {
-        // 0 = Echo Reply（到达目标）
         0 => Some(()),
-        // 11 = Time Exceeded（中间路由器）
         11 => Some(()),
-        // 其他类型忽略
         _ => None,
     }
 }
@@ -225,39 +259,4 @@ async fn resolve_host(host: &str) -> Option<IpAddr> {
         Ok(ips) => ips.iter().next(),
         Err(_) => None,
     }
-}
-
-/// 打印所有跳的结果
-fn print_hops(hops: &[HopResult], host: &str, target: IpAddr) {
-    let headers = ["跳数", "IP 地址", "延迟 1", "延迟 2", "延迟 3"];
-    let rows: Vec<Vec<String>> = hops
-        .iter()
-        .map(|hop| {
-            let mut row = vec![hop.ttl.to_string()];
-
-            // IP 地址（取第一个非 None 的探测）
-            let ip_str = hop
-                .probes
-                .iter()
-                .find_map(|p| p.as_ref().map(|(ip, _)| ip.to_string()))
-                .unwrap_or_else(|| "*".to_string());
-            row.push(ip_str);
-
-            // 三次延迟
-            for i in 0..PROBES_PER_HOP as usize {
-                if let Some(Some((_, rtt))) = hop.probes.get(i) {
-                    row.push(format!("{:.2}ms", rtt.as_secs_f64() * 1000.0));
-                } else {
-                    row.push("*".to_string());
-                }
-            }
-
-            row
-        })
-        .collect();
-
-    print_table(&headers, &rows);
-
-    let _ = host;
-    let _ = target;
 }

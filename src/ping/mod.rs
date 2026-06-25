@@ -2,58 +2,183 @@
 
 use std::time::{Duration, Instant};
 
+use colored::*;
+use serde::Serialize;
+
+use crate::i18n::t;
+use crate::output::{print_json, OutputMode};
 use crate::table::print_table;
 
 /// 单次 ping 结果
-struct PingResult {
-    seq: u32,
-    success: bool,
-    rtt: Option<Duration>,
-    error: Option<String>,
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeResult {
+    pub seq: u32,
+    pub success: bool,
+    pub rtt_ms: Option<f64>,
+    pub error: Option<String>,
+}
+
+/// Ping 统计
+#[derive(Serialize)]
+pub struct PingStats {
+    pub sent: usize,
+    pub received: usize,
+    pub lost: usize,
+    pub loss_rate: f64,
+    pub min_ms: Option<f64>,
+    pub max_ms: Option<f64>,
+    pub avg_ms: Option<f64>,
+}
+
+/// Ping 完整输出
+#[derive(Serialize)]
+pub struct PingOutput {
+    pub host: String,
+    pub target: String,
+    pub probes: Vec<ProbeResult>,
+    pub stats: PingStats,
 }
 
 /// 执行 ping 并输出结果
-///
-/// - `host`: 主机名或 IP
-/// - `count`: 发送包数
-pub async fn run(host: &str, count: u32) {
-    println!();
-    println!("🏓 Ping {}", host);
-
+pub async fn run(host: &str, count: u32, mode: OutputMode) {
     // 解析主机
     let target = match resolve_host(host).await {
         Some(ip) => ip,
         None => {
-            println!("  ❌ 无法解析主机: {}", host);
+            if mode == OutputMode::Json {
+                println!("{{\"error\": \"{}\"}}", t("ping.resolve_fail").replace("{0}", host));
+            } else {
+                println!("  {}", t("ping.resolve_fail").replace("{0}", host).red());
+            }
             return;
         }
     };
 
-    println!("  目标: {} ({})", host, target);
-    println!();
-
     // 先尝试 ICMP ping
-    let results = match surge_ping(host, target, count).await {
+    let probes = match surge_ping_probe(target, count).await {
         Some(r) => r,
         None => {
-            println!("  ⚠ ICMP 不可用，回退到 TCP ping (端口 80)");
-            tcp_ping(host, target, count).await
+            if mode == OutputMode::Table {
+                println!("  {}", t("ping.icmp_fallback").yellow());
+            }
+            tcp_ping_probe(target, count).await
         }
     };
 
-    print_ping_results(&results);
+    let stats = compute_stats(&probes);
+    let output = PingOutput {
+        host: host.to_string(),
+        target: target.to_string(),
+        probes: probes.clone(),
+        stats,
+    };
+
+    if mode == OutputMode::Json {
+        print_json(&output);
+        return;
+    }
+
+    // 表格输出
+    println!();
+    println!("{}", t("ping.title").replace("{0}", host).bold());
+    println!("  {}", t("ping.target").replace("{0}", host).replace("{1}", &target.to_string()));
+
+    for probe in &probes {
+        print_ping_line(host, probe);
+        if probe.seq + 1 < count {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    print_ping_stats(&output.stats);
+}
+
+/// 计算统计
+fn compute_stats(probes: &[ProbeResult]) -> PingStats {
+    let total = probes.len();
+    let success = probes.iter().filter(|r| r.success).count();
+    let lost = total - success;
+    let loss_rate = if total > 0 {
+        (lost as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let rtts: Vec<f64> = probes.iter().filter_map(|r| r.rtt_ms).collect();
+    PingStats {
+        sent: total,
+        received: success,
+        lost,
+        loss_rate,
+        min_ms: rtts.iter().cloned().fold(f64::INFINITY, f64::min).into(),
+        max_ms: rtts.iter().cloned().fold(f64::NEG_INFINITY, f64::max).into(),
+        avg_ms: if rtts.is_empty() {
+            None
+        } else {
+            Some(rtts.iter().sum::<f64>() / rtts.len() as f64)
+        },
+    }
+}
+
+/// 打印单行 ping 结果
+fn print_ping_line(host: &str, result: &ProbeResult) {
+    if result.success {
+        if let Some(rtt) = result.rtt_ms {
+            println!(
+                "  {}",
+                t("ping.reply")
+                    .replace("{0}", &result.seq.to_string())
+                    .replace("{1}", host)
+                    .replace("{2}", &format!("{:.2}", rtt))
+            );
+        }
+    } else {
+        let unknown = t("common.unknown");
+        let err = result.error.as_deref().unwrap_or(&unknown);
+        println!(
+            "  {}",
+            t("ping.fail")
+                .replace("{0}", &result.seq.to_string())
+                .replace("{1}", err)
+                .red()
+        );
+    }
+}
+
+/// 打印 ping 统计结果
+fn print_ping_stats(stats: &PingStats) {
+    println!();
+    println!("{}", t("ping.stats").bold());
+
+    let h_metric = t("ping.sent") + "0"; // placeholder for metric column header
+    let _ = h_metric;
+    let mut rows = Vec::new();
+    rows.push(vec![t("ping.sent"), stats.sent.to_string()]);
+    rows.push(vec![t("ping.recv"), stats.received.to_string()]);
+    rows.push(vec![t("ping.lost"), stats.lost.to_string()]);
+    rows.push(vec![t("ping.loss_rate"), format!("{:.1}%", stats.loss_rate)]);
+
+    if let (Some(min), Some(max), Some(avg)) = (stats.min_ms, stats.max_ms, stats.avg_ms) {
+        rows.push(vec![t("ping.min"), format!("{:.2}ms", min)]);
+        rows.push(vec![t("ping.max"), format!("{:.2}ms", max)]);
+        rows.push(vec![t("ping.avg"), format!("{:.2}ms", avg)]);
+    }
+
+    let h0 = crate::i18n::t("common.success"); // reuse as "Metric" label
+    let h0 = if crate::i18n::current() == crate::i18n::Lang::Zh { "指标".to_string() } else { h0 };
+    let h1 = crate::i18n::t("proxy.value");
+    print_table(&[h0.as_str(), h1.as_str()], &rows);
 }
 
 /// 解析主机名为 IP 地址
 async fn resolve_host(host: &str) -> Option<std::net::IpAddr> {
-    // 如果已经是 IP 地址，直接返回
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+    use std::net::IpAddr;
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
         return Some(ip);
     }
 
-    // DNS 解析
-    use trust_dns_resolver::TokioAsyncResolver;
     use trust_dns_resolver::config::*;
+    use trust_dns_resolver::TokioAsyncResolver;
 
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
     match resolver.lookup_ip(host).await {
@@ -62,73 +187,48 @@ async fn resolve_host(host: &str) -> Option<std::net::IpAddr> {
     }
 }
 
-/// ICMP ping（需要权限）
-async fn surge_ping(
-    host: &str,
-    target: std::net::IpAddr,
-    count: u32,
-) -> Option<Vec<PingResult>> {
-    use surge_ping::{Client, ConfigBuilder, PingIdentifier};
+/// ICMP ping（需要权限），返回探测结果
+async fn surge_ping_probe(target: std::net::IpAddr, count: u32) -> Option<Vec<ProbeResult>> {
+    use surge_ping::{Client, ConfigBuilder, PingIdentifier, PingSequence};
 
     let client = match Client::new(&ConfigBuilder::default().build()) {
         Ok(c) => c,
-        Err(e) => {
-            println!("  ICMP client 创建失败: {}", e);
-            return None;
-        }
+        Err(_) => return None,
     };
 
-    let mut results = Vec::new();
     let identifier = PingIdentifier(std::process::id() as u16);
+    let mut results = Vec::new();
 
     for seq in 0..count {
-        let result = ping_once(&client, target, identifier, seq).await;
-        results.push(result);
-        // 打印每次结果
-        print_ping_line(host, &results.last().unwrap());
-        if seq + 1 < count {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        let payload = [0u8; 32];
+        let mut pinger = client.pinger(target, identifier).await;
+        let result = pinger.ping(PingSequence(seq as u16), &payload).await;
+
+        match result {
+            Ok((_, rtt)) => {
+                results.push(ProbeResult {
+                    seq,
+                    success: true,
+                    rtt_ms: Some(rtt.as_secs_f64() * 1000.0),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                results.push(ProbeResult {
+                    seq,
+                    success: false,
+                    rtt_ms: None,
+                    error: Some(format!("{}", e)),
+                });
+            }
         }
     }
 
     Some(results)
 }
 
-/// 单次 ICMP ping
-async fn ping_once(
-    client: &surge_ping::Client,
-    target: std::net::IpAddr,
-    identifier: surge_ping::PingIdentifier,
-    seq: u32,
-) -> PingResult {
-    use surge_ping::PingSequence;
-
-    let payload = [0u8; 32];
-
-    let mut pinger = client.pinger(target, identifier).await;
-    let result = pinger.ping(PingSequence(seq as u16), &payload).await;
-
-    match result {
-        Ok((packet, rtt)) => {
-            let _ = packet;
-            PingResult {
-                seq,
-                success: true,
-                rtt: Some(rtt),
-                error: None,
-            }
-        }
-        Err(e) => PingResult {
-            seq,
-            success: false,
-            rtt: None,
-            error: Some(format!("{}", e)),
-        },
-    }
-}
-
 /// TCP ping 回退方案（连接 80 端口测延迟）
-async fn tcp_ping(host: &str, target: std::net::IpAddr, count: u32) -> Vec<PingResult> {
+async fn tcp_ping_probe(target: std::net::IpAddr, count: u32) -> Vec<ProbeResult> {
     use tokio::net::TcpStream;
 
     let mut results = Vec::new();
@@ -136,111 +236,36 @@ async fn tcp_ping(host: &str, target: std::net::IpAddr, count: u32) -> Vec<PingR
     for seq in 0..count {
         let start = Instant::now();
         let addr = format!("{}:80", target);
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            TcpStream::connect(&addr),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await;
 
         match result {
             Ok(Ok(_stream)) => {
                 let rtt = start.elapsed();
-                let pr = PingResult {
+                results.push(ProbeResult {
                     seq,
                     success: true,
-                    rtt: Some(rtt),
+                    rtt_ms: Some(rtt.as_secs_f64() * 1000.0),
                     error: None,
-                };
-                print_ping_line(host, &pr);
-                results.push(pr);
+                });
             }
             Ok(Err(e)) => {
-                let pr = PingResult {
+                results.push(ProbeResult {
                     seq,
                     success: false,
-                    rtt: None,
+                    rtt_ms: None,
                     error: Some(format!("TCP: {}", e)),
-                };
-                print_ping_line(host, &pr);
-                results.push(pr);
+                });
             }
             Err(_) => {
-                let pr = PingResult {
+                results.push(ProbeResult {
                     seq,
                     success: false,
-                    rtt: None,
-                    error: Some("TCP: 超时".to_string()),
-                };
-                print_ping_line(host, &pr);
-                results.push(pr);
+                    rtt_ms: None,
+                    error: Some(t("ping.timeout")),
+                });
             }
-        }
-
-        if seq + 1 < count {
-            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
     results
-}
-
-/// 打印单行 ping 结果
-fn print_ping_line(host: &str, result: &PingResult) {
-    match result.success {
-        true => match result.rtt {
-            Some(rtt) => println!(
-                "  seq={} 来自 {} 时间={:.2}ms",
-                result.seq,
-                host,
-                rtt.as_secs_f64() * 1000.0
-            ),
-            None => println!("  seq={} 来自 {} (无延迟数据)", result.seq, host),
-        },
-        false => {
-            let err = result.error.as_deref().unwrap_or("未知错误");
-            println!("  seq={} 失败: {}", result.seq, err);
-        }
-    }
-}
-
-/// 打印 ping 统计结果
-fn print_ping_results(results: &[PingResult]) {
-    println!();
-    println!("📊 统计");
-
-    let total = results.len();
-    let success = results.iter().filter(|r| r.success).count();
-    let lost = total - success;
-    let loss_rate = if total > 0 {
-        (lost as f64 / total as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    let rtts: Vec<f64> = results
-        .iter()
-        .filter_map(|r| r.rtt.map(|d| d.as_secs_f64() * 1000.0))
-        .collect();
-
-    let headers = ["指标", "值"];
-    let mut rows = Vec::new();
-
-    rows.push(vec!["发送".to_string(), total.to_string()]);
-    rows.push(vec!["接收".to_string(), success.to_string()]);
-    rows.push(vec!["丢失".to_string(), lost.to_string()]);
-    rows.push(vec![
-        "丢包率".to_string(),
-        format!("{:.1}%", loss_rate),
-    ]);
-
-    if !rtts.is_empty() {
-        let min = rtts.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = rtts.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let avg = rtts.iter().sum::<f64>() / rtts.len() as f64;
-        rows.push(vec!["最小延迟".to_string(), format!("{:.2}ms", min)]);
-        rows.push(vec!["最大延迟".to_string(), format!("{:.2}ms", max)]);
-        rows.push(vec!["平均延迟".to_string(), format!("{:.2}ms", avg)]);
-    }
-
-    print_table(&headers, &rows);
 }

@@ -2,53 +2,80 @@
 
 use std::time::{Duration, Instant};
 
-use tokio::net::TcpStream;
-use tokio::time::timeout;
+use colored::*;
+use serde::Serialize;
 
+use crate::i18n::t;
+use crate::output::{print_json, OutputMode};
 use crate::table::print_table;
 
-/// 连接超时
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 执行连通性测试
-///
-/// - `target`: 目标地址
-///   - `host:port` → TCP 连通性测试
-///   - `http(s)://url` → HTTP 请求测试
-/// - `count`: 连续测试次数
-pub async fn run(target: &str, count: u32) {
-    println!();
-    println!("🔌 连通性测试: {}", target);
+/// 单次测试结果
+#[derive(Serialize, Clone)]
+pub struct CheckProbe {
+    pub success: bool,
+    pub rtt_ms: f64,
+    pub status_code: Option<u16>,
+    pub error: Option<String>,
+}
 
+/// 连通性测试完整输出
+#[derive(Serialize)]
+pub struct CheckOutput {
+    pub target: String,
+    pub check_type: String,
+    pub probes: Vec<CheckProbe>,
+    pub stats: CheckStats,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CheckStats {
+    pub total: usize,
+    pub success: usize,
+    pub failed: usize,
+    pub min_ms: Option<f64>,
+    pub max_ms: Option<f64>,
+    pub avg_ms: Option<f64>,
+}
+
+/// 执行连通性测试
+pub async fn run(target: &str, count: u32, mode: OutputMode) {
     if target.starts_with("http://") || target.starts_with("https://") {
-        run_http(target, count).await;
+        run_http(target, count, mode).await;
     } else {
-        run_tcp(target, count).await;
+        run_tcp(target, count, mode).await;
     }
 }
 
 /// TCP 连通性测试
-async fn run_tcp(target: &str, count: u32) {
-    // 解析 host:port
+async fn run_tcp(target: &str, count: u32, mode: OutputMode) {
+    use tokio::net::TcpStream;
+    use tokio::time::timeout;
+
     let parts: Vec<&str> = target.rsplitn(2, ':').collect();
     if parts.len() != 2 {
-        println!("  ❌ 格式错误，请使用 host:port");
+        if mode == OutputMode::Json {
+            println!("{{\"error\": \"{}\"}}", t("check.format_err"));
+        } else {
+            println!("  {}", t("check.format_err").red());
+        }
         return;
     }
     let port: u16 = match parts[0].parse() {
         Ok(p) => p,
         Err(_) => {
-            println!("  ❌ 端口号无效: {}", parts[0]);
+            if mode == OutputMode::Json {
+                println!("{{\"error\": \"{}\"}}", t1("check.port_err", parts[0]));
+            } else {
+                println!("  {}", t1("check.port_err", parts[0]).red());
+            }
             return;
         }
     };
     let host = parts[1];
 
-    println!("  类型: TCP");
-    println!("  目标: {}:{}", host, port);
-    println!();
-
-    let mut results = Vec::new();
+    let mut probes = Vec::new();
 
     for i in 0..count {
         let start = Instant::now();
@@ -58,21 +85,58 @@ async fn run_tcp(target: &str, count: u32) {
 
         match result {
             Ok(Ok(_stream)) => {
-                println!(
-                    "  [{}/{}] ✓ 连接成功  {:.2}ms",
-                    i + 1,
-                    count,
-                    elapsed.as_secs_f64() * 1000.0
-                );
-                results.push((true, elapsed));
+                if mode == OutputMode::Table {
+                    println!(
+                        "  {}",
+                        t("check.tcp_ok")
+                            .replace("{0}", &(i + 1).to_string())
+                            .replace("{1}", &count.to_string())
+                            .replace("{2}", &format!("{:.2}", elapsed.as_secs_f64() * 1000.0))
+                            .green()
+                    );
+                }
+                probes.push(CheckProbe {
+                    success: true,
+                    rtt_ms: elapsed.as_secs_f64() * 1000.0,
+                    status_code: None,
+                    error: None,
+                });
             }
             Ok(Err(e)) => {
-                println!("  [{}/{}] ✗ 连接失败  {}", i + 1, count, e);
-                results.push((false, elapsed));
+                if mode == OutputMode::Table {
+                    println!(
+                        "  {}",
+                        t("check.tcp_fail")
+                            .replace("{0}", &(i + 1).to_string())
+                            .replace("{1}", &count.to_string())
+                            .replace("{2}", &e.to_string())
+                            .red()
+                    );
+                }
+                probes.push(CheckProbe {
+                    success: false,
+                    rtt_ms: elapsed.as_secs_f64() * 1000.0,
+                    status_code: None,
+                    error: Some(e.to_string()),
+                });
             }
             Err(_) => {
-                println!("  [{}/{}] ✗ 连接超时 ({}s)", i + 1, count, CONNECT_TIMEOUT.as_secs());
-                results.push((false, CONNECT_TIMEOUT));
+                if mode == OutputMode::Table {
+                    println!(
+                        "  {}",
+                        t("check.tcp_timeout")
+                            .replace("{0}", &(i + 1).to_string())
+                            .replace("{1}", &count.to_string())
+                            .replace("{2}", &CONNECT_TIMEOUT.as_secs().to_string())
+                            .red()
+                    );
+                }
+                probes.push(CheckProbe {
+                    success: false,
+                    rtt_ms: CONNECT_TIMEOUT.as_secs_f64() * 1000.0,
+                    status_code: None,
+                    error: Some(t("check.req_timeout")),
+                });
             }
         }
 
@@ -81,21 +145,30 @@ async fn run_tcp(target: &str, count: u32) {
         }
     }
 
-    print_tcp_stats(&results);
+    let stats = compute_stats(&probes);
+    let output = CheckOutput {
+        target: target.to_string(),
+        check_type: "tcp".to_string(),
+        probes: probes.clone(),
+        stats: stats.clone(),
+    };
+
+    if mode == OutputMode::Json {
+        print_json(&output);
+        return;
+    }
+
+    print_stats(&stats, false);
 }
 
 /// HTTP 连通性测试
-async fn run_http(url: &str, count: u32) {
-    println!("  类型: HTTP");
-    println!("  URL:  {}", url);
-    println!();
-
+async fn run_http(url: &str, count: u32, mode: OutputMode) {
     let client = reqwest::Client::builder()
         .timeout(CONNECT_TIMEOUT)
         .build()
         .unwrap();
 
-    let mut results = Vec::new();
+    let mut probes = Vec::new();
 
     for i in 0..count {
         let start = Instant::now();
@@ -104,31 +177,55 @@ async fn run_http(url: &str, count: u32) {
 
         match result {
             Ok(resp) => {
-                let status = resp.status();
-                let status_code = status.as_u16();
-                let is_success = status.is_success();
-                let symbol = if is_success { "✓" } else { "⚠" };
+                let status_code = resp.status().as_u16();
+                let is_success = resp.status().is_success();
 
-                println!(
-                    "  [{}/{}] {} {}  {:.2}ms",
-                    i + 1,
-                    count,
-                    symbol,
-                    status_code,
-                    elapsed.as_secs_f64() * 1000.0
-                );
-                results.push((is_success, status_code, elapsed));
+                if mode == OutputMode::Table {
+                    let symbol = if is_success { "✓".green() } else { "⚠".yellow() };
+                    println!(
+                        "  [{}/{}] {} {}  {:.2}ms",
+                        i + 1,
+                        count,
+                        symbol,
+                        status_code,
+                        elapsed.as_secs_f64() * 1000.0
+                    );
+                }
+
+                probes.push(CheckProbe {
+                    success: is_success,
+                    rtt_ms: elapsed.as_secs_f64() * 1000.0,
+                    status_code: Some(status_code),
+                    error: None,
+                });
             }
             Err(e) => {
                 let msg = if e.is_connect() {
-                    "连接失败".to_string()
+                    t("check.conn_fail")
                 } else if e.is_timeout() {
-                    "请求超时".to_string()
+                    t("check.req_timeout")
                 } else {
                     e.to_string()
                 };
-                println!("  [{}/{}] ✗ {}  {:.2}ms", i + 1, count, msg, elapsed.as_secs_f64() * 1000.0);
-                results.push((false, 0, elapsed));
+
+                if mode == OutputMode::Table {
+                    println!(
+                        "  {}",
+                        t("check.http_fail")
+                            .replace("{0}", &(i + 1).to_string())
+                            .replace("{1}", &count.to_string())
+                            .replace("{2}", &msg)
+                            .replace("{3}", &format!("{:.2}", elapsed.as_secs_f64() * 1000.0))
+                            .red()
+                    );
+                }
+
+                probes.push(CheckProbe {
+                    success: false,
+                    rtt_ms: elapsed.as_secs_f64() * 1000.0,
+                    status_code: None,
+                    error: Some(msg),
+                });
             }
         }
 
@@ -137,67 +234,65 @@ async fn run_http(url: &str, count: u32) {
         }
     }
 
-    print_http_stats(&results);
+    let stats = compute_stats(&probes);
+    let output = CheckOutput {
+        target: url.to_string(),
+        check_type: "http".to_string(),
+        probes: probes.clone(),
+        stats: stats.clone(),
+    };
+
+    if mode == OutputMode::Json {
+        print_json(&output);
+        return;
+    }
+
+    print_stats(&stats, true);
 }
 
-/// 打印 TCP 测试统计
-fn print_tcp_stats(results: &[(bool, Duration)]) {
-    let total = results.len();
-    let success = results.iter().filter(|(s, _)| *s).count();
-    let rtts: Vec<f64> = results
-        .iter()
-        .filter(|(s, _)| *s)
-        .map(|(_, d)| d.as_secs_f64() * 1000.0)
-        .collect();
+/// 计算统计
+fn compute_stats(probes: &[CheckProbe]) -> CheckStats {
+    let total = probes.len();
+    let success = probes.iter().filter(|p| p.success).count();
+    let rtts: Vec<f64> = probes.iter().filter(|p| p.success).map(|p| p.rtt_ms).collect();
 
+    CheckStats {
+        total,
+        success,
+        failed: total - success,
+        min_ms: rtts.iter().cloned().fold(f64::INFINITY, f64::min).into(),
+        max_ms: rtts.iter().cloned().fold(f64::NEG_INFINITY, f64::max).into(),
+        avg_ms: if rtts.is_empty() {
+            None
+        } else {
+            Some(rtts.iter().sum::<f64>() / rtts.len() as f64)
+        },
+    }
+}
+
+/// 打印统计
+fn print_stats(stats: &CheckStats, is_http: bool) {
     println!();
-    println!("📊 统计");
+    println!("{}", t("ping.stats").bold());
 
     let headers = ["指标", "值"];
     let mut rows = Vec::new();
-    rows.push(vec!["测试次数".to_string(), total.to_string()]);
-    rows.push(vec!["成功".to_string(), success.to_string()]);
-    rows.push(vec!["失败".to_string(), (total - success).to_string()]);
+    rows.push(vec![t("check.count"), stats.total.to_string()]);
 
-    if !rtts.is_empty() {
-        let min = rtts.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = rtts.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let avg = rtts.iter().sum::<f64>() / rtts.len() as f64;
-        rows.push(vec!["最小延迟".to_string(), format!("{:.2}ms", min)]);
-        rows.push(vec!["最大延迟".to_string(), format!("{:.2}ms", max)]);
-        rows.push(vec!["平均延迟".to_string(), format!("{:.2}ms", avg)]);
+    if is_http {
+        rows.push(vec![t("check.ok_2xx"), stats.success.to_string()]);
+    } else {
+        rows.push(vec![t("check.ok"), stats.success.to_string()]);
+    }
+    rows.push(vec![t("check.fail_count"), stats.failed.to_string()]);
+
+    if let (Some(min), Some(max), Some(avg)) = (stats.min_ms, stats.max_ms, stats.avg_ms) {
+        rows.push(vec![t("ping.min"), format!("{:.2}ms", min)]);
+        rows.push(vec![t("ping.max"), format!("{:.2}ms", max)]);
+        rows.push(vec![t("ping.avg"), format!("{:.2}ms", avg)]);
     }
 
     print_table(&headers, &rows);
 }
 
-/// 打印 HTTP 测试统计
-fn print_http_stats(results: &[(bool, u16, Duration)]) {
-    let total = results.len();
-    let success = results.iter().filter(|(s, _, _)| *s).count();
-    let rtts: Vec<f64> = results
-        .iter()
-        .filter(|(s, _, _)| *s)
-        .map(|(_, _, d)| d.as_secs_f64() * 1000.0)
-        .collect();
-
-    println!();
-    println!("📊 统计");
-
-    let headers = ["指标", "值"];
-    let mut rows = Vec::new();
-    rows.push(vec!["测试次数".to_string(), total.to_string()]);
-    rows.push(vec!["成功 (2xx)".to_string(), success.to_string()]);
-    rows.push(vec!["失败/错误".to_string(), (total - success).to_string()]);
-
-    if !rtts.is_empty() {
-        let min = rtts.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = rtts.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let avg = rtts.iter().sum::<f64>() / rtts.len() as f64;
-        rows.push(vec!["最小延迟".to_string(), format!("{:.2}ms", min)]);
-        rows.push(vec!["最大延迟".to_string(), format!("{:.2}ms", max)]);
-        rows.push(vec!["平均延迟".to_string(), format!("{:.2}ms", avg)]);
-    }
-
-    print_table(&headers, &rows);
-}
+use crate::i18n::t1;

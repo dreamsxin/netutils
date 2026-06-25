@@ -1,39 +1,57 @@
 //! 代理检测模块。
 
+use serde::Serialize;
 use std::env;
 
-/// 代理信息条目 (类型名, 值)
-pub type ProxyEntry = (String, String);
+/// 代理信息条目
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyEntry {
+    pub ptype: String,
+    pub value: String,
+}
 
 /// 获取所有代理设置（环境变量 + Windows 系统代理）
 pub fn get_proxy_info() -> Vec<ProxyEntry> {
+    use crate::i18n::t;
     let mut proxies = Vec::new();
 
     let proxy_vars = [
-        ("HTTP_PROXY", "HTTP 代理"),
-        ("HTTPS_PROXY", "HTTPS 代理"),
-        ("ALL_PROXY", "全局代理"),
-        ("NO_PROXY", "排除列表"),
+        ("HTTP_PROXY", "proxy.http"),
+        ("HTTPS_PROXY", "proxy.https"),
+        ("ALL_PROXY", "proxy.all"),
+        ("NO_PROXY", "proxy.no"),
     ];
 
-    for (var, label) in &proxy_vars {
+    for (var, label_key) in &proxy_vars {
         let value = env::var(var)
             .or_else(|_| env::var(var.to_lowercase()))
             .unwrap_or_default();
         if !value.is_empty() {
-            proxies.push((label.to_string(), value));
+            proxies.push(ProxyEntry {
+                ptype: t(label_key),
+                value,
+            });
         }
     }
 
     if proxies.is_empty() {
-        proxies.push(("环境变量".to_string(), "未设置".to_string()));
+        proxies.push(ProxyEntry {
+            ptype: t("proxy.env"),
+            value: t("common.not_set"),
+        });
     }
 
     #[cfg(target_os = "windows")]
     {
         match get_windows_system_proxy() {
-            Some(proxy) => proxies.push(("系统代理".to_string(), proxy)),
-            None => proxies.push(("系统代理".to_string(), "未启用".to_string())),
+            Some(proxy) => proxies.push(ProxyEntry {
+                ptype: t("proxy.system"),
+                value: proxy,
+            }),
+            None => proxies.push(ProxyEntry {
+                ptype: t("proxy.system"),
+                value: t("proxy.disabled"),
+            }),
         }
     }
 
