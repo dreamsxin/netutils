@@ -86,10 +86,11 @@ pub fn print_banner(title: &str) {
     let title_w = crate::table::display_width(title);
     let inner_w = title_w + 4;
     let border: String = "─".repeat(inner_w);
+    let line = format!("│  {}  │", title);
     println!();
-    println!("┌{}┐", border.cyan());
-    println!("│  {}  │", title.cyan().bold());
-    println!("└{}┘", border.cyan());
+    println!("{}", format!("┌{}┐", border).cyan());
+    println!("{}", line.cyan().bold());
+    println!("{}", format!("└{}┘", border).cyan());
 }
 
 /// 打印网络接口列表

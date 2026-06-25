@@ -2,13 +2,39 @@
 
 use unicode_width::UnicodeWidthChar;
 
-/// 计算字符串的显示宽度（使用 unicode-width 精确计算）
+/// 计算字符串的显示宽度（使用 unicode-width 精确计算，自动剥离 ANSI 转义码）
 pub fn display_width(s: &str) -> usize {
+    // 先剥离 ANSI 转义序列（colored crate 产生的 \x1b[...m）
+    let stripped = strip_ansi(s);
     let mut width = 0;
-    for ch in s.chars() {
+    for ch in stripped.chars() {
         width += ch.width().unwrap_or(0);
     }
     width
+}
+
+/// 剥离 ANSI 转义序列
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // 跳过 ESC[ ... m 序列
+            if chars.peek() == Some(&'[') {
+                chars.next(); // 消费 '['
+                while let Some(c) = chars.next() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                // 其他 ESC 序列，跳过
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// 生成一行表格（数据行，统一用显示宽度对齐）
