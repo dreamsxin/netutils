@@ -45,4 +45,19 @@ pub enum Commands {
         /// 目标主机名或 IP
         host: String,
     },
+    /// 端口扫描（并发 TCP connect）
+    Scan {
+        /// 目标主机名或 IP
+        host: String,
+        /// 端口列表，逗号分隔（如 80,443,8080），不指定则扫描常见端口
+        ports: Option<String>,
+    },
+    /// 连通性测试（TCP 端口 / HTTP URL）
+    Check {
+        /// 目标地址（host:port 或 http(s)://url）
+        target: String,
+        /// 测试次数（默认 4）
+        #[arg(short, long, default_value_t = 4)]
+        count: u32,
+    },
 }
