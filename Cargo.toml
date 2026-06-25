@@ -7,6 +7,9 @@ description = "本地网络检测工具集"
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 unicode-width = "0.2"
+tokio = { version = "1", features = ["full"] }
+surge-ping = "0.8"
+trust-dns-resolver = "0.23"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
