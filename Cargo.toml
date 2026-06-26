@@ -1,6 +1,6 @@
 [package]
 name = "netutils-cli"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "本地网络检测工具集：网络接口、路由、出口、代理检测，Ping、DNS、Traceroute、端口扫描、连通性测试"
 license = "MIT"

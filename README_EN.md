@@ -20,12 +20,25 @@ A cross-platform command-line network diagnostic tool written in Rust. Covers ne
 | `trace` | Traceroute | `netutils trace google.com` |
 | `scan` | Port scan | `netutils scan 192.168.1.1 80,443` |
 | `check` | Connectivity test | `netutils check https://example.com` |
+| `connections` | Network connections (TCP/UDP) | `netutils connections --state LISTEN` |
 | `diag` | One-click diagnostics | `netutils diag` |
+
+### Installation
+
+```bash
+# Install from crates.io (recommended)
+cargo install netutils-cli
+
+# Use directly after install
+netutils --help
+```
 
 ### Quick Start
 
 ```bash
-# Build
+# Build from source
+git clone https://github.com/dreamsxin/netutils-cli.git
+cd netutils-cli
 cargo build --release
 
 # Run
@@ -59,7 +72,7 @@ $ netutils diag
 - **i18n**: Auto-detects system language (Chinese/English), `--lang zh|en` to override
 - **JSON output**: `--json` flag for all commands, pipe-friendly
 - **Color highlighting**: Egress in green, errors in red, virtual adapters in yellow
-- **Command aliases**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`dx`
+- **Command aliases**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`co`/`dx`
 - **Cross-platform**: Windows (PowerShell), Linux (`ip`), macOS (`ifconfig`)
 - **System proxy aware**: HTTP checks auto-detect and use system proxy, labeled `[via proxy]`/`[direct]`
 - **Egress detection**: UDP probe identifies actual traffic egress + explains routing logic

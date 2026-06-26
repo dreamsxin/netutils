@@ -92,6 +92,7 @@ pub fn get_system_proxy_addr() -> Option<String> {
 }
 
 /// 将代理地址格式化为完整 URL
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn format_proxy_url(addr: &str) -> String {
     if addr.starts_with("http://") || addr.starts_with("https://") || addr.starts_with("socks") {
         addr.to_string()

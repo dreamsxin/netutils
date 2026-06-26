@@ -105,7 +105,6 @@ fn parse_ip_addr_text(text: &str) -> Vec<InterfaceInfo> {
     let mut current_name = String::new();
     let mut current_mac = String::from("--");
     let mut current_ipv4 = String::from("--");
-    let mut current_status = "Down".to_string();
     let mut current_desc = String::new();
     let mut is_up = false;
 

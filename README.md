@@ -20,12 +20,25 @@
 | `trace` | 路由追踪 | `netutils trace baidu.com` |
 | `scan` | 端口扫描 | `netutils scan 192.168.1.1 80,443` |
 | `check` | 连通性测试 | `netutils check https://baidu.com` |
+| `connections` | 网络连接列表 (TCP/UDP) | `netutils connections --state LISTEN` |
 | `diag` | 一键诊断 | `netutils diag` |
+
+### 安装
+
+```bash
+# 从 crates.io 安装（推荐）
+cargo install netutils-cli
+
+# 安装后直接使用
+netutils --help
+```
 
 ### 快速开始
 
 ```bash
-# 编译
+# 从源码编译
+git clone https://github.com/dreamsxin/netutils-cli.git
+cd netutils-cli
 cargo build --release
 
 # 运行
@@ -59,7 +72,7 @@ $ netutils diag
 - **国际化**: 自动检测系统语言（中英文），`--lang zh|en` 可覆盖
 - **JSON 输出**: `--json` 全局参数，所有子命令支持，便于脚本处理
 - **颜色高亮**: 出口绿色、错误红色、虚拟网卡黄色
-- **命令别名**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`dx`
+- **命令别名**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`co`/`dx`
 - **跨平台**: Windows (PowerShell)、Linux (`ip`)、macOS (`ifconfig`)
 - **系统代理感知**: HTTP 检测自动走系统代理，标注 `[经代理]`/`[直连]`
 - **出口检测**: UDP 探测识别实际流量出口 + 解释选路逻辑
