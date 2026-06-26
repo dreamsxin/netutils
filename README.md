@@ -4,7 +4,7 @@
 
 ---
 
-一个用 Rust 编写的跨平台命令行网络诊断工具。涵盖网络接口、路由、出口检测、代理检测、Ping、DNS、Traceroute、端口扫描、连通性测试和一键诊断。
+一个用 Rust 编写的跨平台命令行网络诊断工具。涵盖网络接口、路由、出口检测、代理检测、Ping、DNS、Traceroute、端口扫描、连通性测试、连接列表、一键诊断和全链路诊断。
 
 ### 功能
 
@@ -22,6 +22,7 @@
 | `check` | 连通性测试 | `netutils check https://baidu.com` |
 | `connections` | 网络连接列表 (TCP/UDP) | `netutils connections --state LISTEN` |
 | `diag` | 一键诊断 | `netutils diag` |
+| `diagnose` | 全链路诊断 (DNS→Ping→TCP→HTTPS→Trace) | `netutils diagnose baidu.com` |
 
 ### 安装
 
@@ -67,12 +68,40 @@ $ netutils diag
   诊断耗时: 8.2s
 ```
 
+### 全链路诊断
+
+对指定目标自动执行完整链路检测（DNS → Ping → TCP → HTTPS → Traceroute），并自动定位断点给出结论：
+
+```bash
+$ netutils diagnose google.com
+
+🔍 全链路诊断: google.com
+
+  ✅ [① DNS 解析]
+     系统 DNS: google.com → 142.251.188.138 (199ms)
+  ❌ [② Ping 探测]
+     173.194.43.139 不可达 (100% 丢包)
+  ❌ [③ TCP 端口 443]
+     连接失败: timeout (3s)
+  ✅ [④ HTTPS 请求]
+     https://google.com → 200 (807ms) [经代理]
+  ⚠️  [⑤ Traceroute (最多 10 跳)]
+     未到达目标 (10 跳内)
+
+  📍 诊断结论: 主机不可达，IP 无法 ping 通
+  链路: ✅ DNS → ❌ Ping → ❌ TCP → ✅ HTTPS
+
+  耗时: 20.2s
+```
+
+自动结论定位：DNS 失败 → "DNS 解析失败" / Ping 失败 → "主机不可达" / TCP 失败 → "端口不通" / HTTPS 失败 → "HTTPS 异常" / 全部正常 → "链路正常"
+
 ### 核心特性
 
 - **国际化**: 自动检测系统语言（中英文），`--lang zh|en` 可覆盖
 - **JSON 输出**: `--json` 全局参数，所有子命令支持，便于脚本处理
 - **颜色高亮**: 出口绿色、错误红色、虚拟网卡黄色
-- **命令别名**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`co`/`dx`
+- **命令别名**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`co`/`dx`/`dg`
 - **跨平台**: Windows (PowerShell)、Linux (`ip`)、macOS (`ifconfig`)
 - **系统代理感知**: HTTP 检测自动走系统代理，标注 `[经代理]`/`[直连]`
 - **出口检测**: UDP 探测识别实际流量出口 + 解释选路逻辑

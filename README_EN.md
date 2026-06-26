@@ -4,7 +4,7 @@ English | [中文](README.md)
 
 ---
 
-A cross-platform command-line network diagnostic tool written in Rust. Covers network interfaces, routing, egress detection, proxy detection, Ping, DNS, Traceroute, port scanning, connectivity testing, and one-click diagnostics.
+A cross-platform command-line network diagnostic tool written in Rust. Covers network interfaces, routing, egress detection, proxy detection, Ping, DNS, Traceroute, port scanning, connectivity testing, connection listing, one-click diagnostics, and full-link diagnostics.
 
 ### Features
 
@@ -22,6 +22,7 @@ A cross-platform command-line network diagnostic tool written in Rust. Covers ne
 | `check` | Connectivity test | `netutils check https://example.com` |
 | `connections` | Network connections (TCP/UDP) | `netutils connections --state LISTEN` |
 | `diag` | One-click diagnostics | `netutils diag` |
+| `diagnose` | Full-link diagnostics (DNS→Ping→TCP→HTTPS→Trace) | `netutils diagnose example.com` |
 
 ### Installation
 
@@ -67,12 +68,40 @@ $ netutils diag
   Time: 8.2s
 ```
 
+### Full-Link Diagnostics
+
+Automatically runs a complete link check (DNS → Ping → TCP → HTTPS → Traceroute) on a target host and pinpoints the failure:
+
+```bash
+$ netutils diagnose google.com
+
+🔍 Link Diagnostics: google.com
+
+  ✅ [① DNS Resolution]
+     System DNS: google.com → 142.251.188.138 (199ms)
+  ❌ [② Ping Probe]
+     173.194.43.139 unreachable (100% loss)
+  ❌ [③ TCP Port 443]
+     Connection failed: timeout (3s)
+  ✅ [④ HTTPS Request]
+     https://google.com → 200 (807ms) [via proxy]
+  ⚠️  [⑤ Traceroute (max 10 hops)]
+     Not reached (10 hops)
+
+  📍 Conclusion: Host unreachable
+  Chain: ✅ DNS → ❌ Ping → ❌ TCP → ✅ HTTPS
+
+  Time: 20.2s
+```
+
+Auto-conclusion: DNS fail → "DNS resolution failed" / Ping fail → "Host unreachable" / TCP fail → "TCP port unreachable" / HTTPS fail → "HTTPS failed" / All OK → "Link healthy"
+
 ### Key Features
 
 - **i18n**: Auto-detects system language (Chinese/English), `--lang zh|en` to override
 - **JSON output**: `--json` flag for all commands, pipe-friendly
 - **Color highlighting**: Egress in green, errors in red, virtual adapters in yellow
-- **Command aliases**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`co`/`dx`
+- **Command aliases**: `i`/`e`/`r`/`p`/`pg`/`d`/`t`/`s`/`c`/`co`/`dx`/`dg`
 - **Cross-platform**: Windows (PowerShell), Linux (`ip`), macOS (`ifconfig`)
 - **System proxy aware**: HTTP checks auto-detect and use system proxy, labeled `[via proxy]`/`[direct]`
 - **Egress detection**: UDP probe identifies actual traffic egress + explains routing logic
@@ -107,7 +136,9 @@ netutils/
     ├── traceroute/mod.rs    # Traceroute
     ├── portscan/mod.rs      # Port scan
     ├── connectivity/mod.rs  # Connectivity test
-    └── diag/mod.rs          # One-click diagnostics
+    ├── connections/mod.rs   # Connection listing
+    ├── diag/mod.rs          # One-click diagnostics
+    └── diagnose/mod.rs      # Full-link diagnostics
 ```
 
 ### Dependencies
