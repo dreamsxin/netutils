@@ -165,7 +165,7 @@ fn print_ping_stats(stats: &PingStats) {
 }
 
 /// ICMP ping（需要权限），返回探测结果
-async fn surge_ping_probe(target: std::net::IpAddr, count: u32) -> Option<Vec<ProbeResult>> {
+pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32) -> Option<Vec<ProbeResult>> {
     use surge_ping::{Client, ConfigBuilder, PingIdentifier, PingSequence};
 
     let client = match Client::new(&ConfigBuilder::default().build()) {
@@ -205,7 +205,7 @@ async fn surge_ping_probe(target: std::net::IpAddr, count: u32) -> Option<Vec<Pr
 }
 
 /// TCP ping 回退方案（连接 80 端口测延迟）
-async fn tcp_ping_probe(target: std::net::IpAddr, count: u32) -> Vec<ProbeResult> {
+pub(crate) async fn tcp_ping_probe(target: std::net::IpAddr, count: u32) -> Vec<ProbeResult> {
     use tokio::net::TcpStream;
 
     let mut results = Vec::new();

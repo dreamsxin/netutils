@@ -49,7 +49,7 @@ pub async fn run(target: &str, count: u32, mode: OutputMode) {
 }
 
 /// 解析 host:port（支持 IPv6 如 [::1]:443）
-fn parse_host_port(target: &str) -> Option<(String, u16)> {
+pub(crate) fn parse_host_port(target: &str) -> Option<(String, u16)> {
     // 尝试整体解析为 SocketAddr（覆盖 IPv6 [::1]:443 和 IPv4 1.2.3.4:443）
     if let Ok(addr) = target.parse::<std::net::SocketAddr>() {
         return Some((addr.ip().to_string(), addr.port()));

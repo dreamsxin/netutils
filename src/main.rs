@@ -2,6 +2,7 @@ mod cli;
 mod connections;
 mod connectivity;
 mod diag;
+mod diagnose;
 mod dns;
 mod i18n;
 mod info;
@@ -55,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Some(Commands::Diag) => diag::run(mode).await,
+        Some(Commands::Diagnose { host }) => diagnose::run(&host, mode).await,
     }
 
     Ok(())

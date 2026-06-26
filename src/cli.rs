@@ -106,4 +106,11 @@ pub enum Commands {
     /// 一键诊断（组合检测，给出结论）
     #[command(alias = "dx")]
     Diag,
+
+    /// 全链路诊断：DNS → Ping → TCP → HTTPS → Traceroute，给出结论
+    #[command(alias = "dg")]
+    Diagnose {
+        /// 目标主机名或 IP
+        host: String,
+    },
 }
