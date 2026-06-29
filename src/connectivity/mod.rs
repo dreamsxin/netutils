@@ -204,6 +204,7 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
     } else {
         crate::util::get_system_proxy_addr()
     };
+    // --timing 仅在直连 HTTPS 时生效，有代理时静默忽略
     let can_breakdown = timing && proxy_addr.is_none() && url.starts_with("https://");
 
     let mut builder = reqwest::Client::builder().timeout(connect_timeout);
@@ -320,12 +321,6 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
     }
 
     print_stats(&stats, true);
-
-    // 代理/HTTP 模式提示
-    if timing && !can_breakdown && mode == OutputMode::Table {
-        println!();
-        println!("  {}", t("check.timing_unsupported").dimmed());
-    }
 }
 
 /// 手动分步计时 HTTPS 请求（DNS → TCP → TLS → TTFB）
