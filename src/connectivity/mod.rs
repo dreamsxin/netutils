@@ -74,6 +74,17 @@ pub(crate) fn parse_host_port(target: &str) -> Option<(String, u16)> {
     None
 }
 
+/// 从代理 URL 提取 host 和 port
+/// 支持 http://host:port, socks5://host:port, socks5h://host:port
+fn parse_proxy_host_port(proxy_url: &str) -> Option<(String, u16)> {
+    let rest = proxy_url.split("://").nth(1)?;
+    let host_port = rest.split('/').next()?;
+    let (host, port_str) = host_port.rsplit_once(':')?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port: u16 = port_str.parse().ok()?;
+    Some((host.to_string(), port))
+}
+
 /// 从 URL 提取 host 和 port
 fn parse_url(url: &str) -> Option<(String, u16, bool)> {
     let (scheme, rest) = url.split_once("://")?;
@@ -207,11 +218,38 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
     // --timing 仅在直连 HTTPS 时生效，有代理时静默忽略
     let can_breakdown = timing && proxy_addr.is_none() && url.starts_with("https://");
 
-    let mut builder = reqwest::Client::builder().timeout(connect_timeout);
+    // 如果指定了代理，先验证代理地址有效且端口可达，避免 reqwest 静默回退直连
+    if let Some(ref proxy_url) = proxy_addr {
+        match parse_proxy_host_port(proxy_url) {
+            Some((host, port)) => {
+                let addr = format!("{}:{}", host, port);
+                match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(&addr)).await {
+                    Ok(Ok(_)) => {} // 代理端口可达，继续
+                    _ => {
+                        let msg = format!("代理不可达: {}", proxy_url);
+                        if mode == OutputMode::Json {
+                            print_json_error(&msg);
+                        } else {
+                            println!("  {}", format!("❌ {}", msg).red());
+                        }
+                        return;
+                    }
+                }
+            }
+            None => {
+                // 代理地址格式无效（如端口超范围），直接报错
+                let msg = format!("代理地址无效: {}", proxy_url);
+                if mode == OutputMode::Json {
+                    print_json_error(&msg);
+                } else {
+                    println!("  {}", format!("❌ {}", msg).red());
+                }
+                return;
+            }
+        }
+    }
 
-    // 关键：始终先 no_proxy() 禁止 reqwest 自动读环境变量代理，
-    // 然后如果有显式代理再手动设上，确保 --proxy 失败时不会回退直连
-    builder = builder.no_proxy();
+    let mut builder = reqwest::Client::builder().timeout(connect_timeout).no_proxy();
 
     if let Some(ref proxy_url) = proxy_addr {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
