@@ -272,14 +272,21 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
                     };
 
                     if mode == OutputMode::Table {
+                        let proxy_tag = if proxy_addr.is_some() {
+                            format!(" [{}]", t("diagnose.via_proxy"))
+                        } else {
+                            String::new()
+                        };
                         println!(
                             "  {}",
-                            t("check.http_fail")
-                                .replace("{0}", &(i + 1).to_string())
-                                .replace("{1}", &count.to_string())
-                                .replace("{2}", &msg)
-                                .replace("{3}", &format!("{:.2}", elapsed.as_secs_f64() * 1000.0))
-                                .red()
+                            format!(
+                                "[{}/{}] ✗ {}  {:.2}ms{}",
+                                i + 1,
+                                count,
+                                msg,
+                                elapsed.as_secs_f64() * 1000.0,
+                                proxy_tag
+                            ).red()
                         );
                     }
 
