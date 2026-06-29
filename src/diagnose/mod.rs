@@ -215,13 +215,11 @@ async fn check_https(host: &str) -> DiagStep {
     let via_proxy = proxy_addr.is_some();
     let proxy_tag = if via_proxy { t("diagnose.via_proxy") } else { t("diagnose.no_proxy") };
 
-    let mut builder = reqwest::Client::builder().timeout(HTTPS_TIMEOUT);
+    let mut builder = reqwest::Client::builder().timeout(HTTPS_TIMEOUT).no_proxy();
     if let Some(ref proxy_url) = proxy_addr {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
             builder = builder.proxy(proxy);
         }
-    } else {
-        builder = builder.no_proxy();
     }
     let client = builder.build().unwrap();
 

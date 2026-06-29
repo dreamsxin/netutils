@@ -57,8 +57,8 @@ async fn main() -> anyhow::Result<()> {
                 .map(|v| v.as_slice());
             portscan::run(&host, port_ref, concurrency, mode).await
         }
-        Some(Commands::Check { target, count, timeout, timing, proxy, no_proxy }) => {
-            connectivity::run(&target, count, Duration::from_secs(timeout), timing, proxy, no_proxy, mode).await
+        Some(Commands::Check { target, count, timeout, timing, proxy, no_proxy, concurrency }) => {
+            connectivity::run(&target, count, Duration::from_secs(timeout), timing, proxy, no_proxy, concurrency, mode).await
         }
         Some(Commands::Connections { state, port, process, proto }) => {
             let filter = connections::ConnFilter {

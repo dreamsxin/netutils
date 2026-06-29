@@ -114,6 +114,9 @@ pub enum Commands {
         /// 强制直连，忽略系统代理
         #[arg(long)]
         no_proxy: bool,
+        /// 并发数（默认 1，串行）
+        #[arg(long, default_value_t = 1)]
+        concurrency: usize,
     },
 
     /// 列出当前网络连接（TCP/UDP）

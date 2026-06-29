@@ -250,6 +250,11 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         ("check.timing_ttfb", "首字节", "TTFB"),
         ("check.timing_total", "总计", "Total"),
         ("check.timing_unsupported", "（代理/HTTP 模式不支持分解，仅直连 HTTPS 可用）", "(breakdown unavailable with proxy/HTTP, direct HTTPS only)"),
+        ("check.concurrency", "并发数", "Concurrency"),
+        ("check.total_reqs", "总请求数", "Total Requests"),
+        ("check.success_reqs", "成功请求", "Successful"),
+        ("check.fail_reqs", "失败请求", "Failed"),
+        ("check.qps", "吞吐 (QPS)", "Throughput (QPS)"),
 
         // ── diag ──
         // ── connections ──

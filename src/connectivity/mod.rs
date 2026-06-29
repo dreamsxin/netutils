@@ -50,9 +50,9 @@ pub struct CheckStats {
 }
 
 /// 执行连通性测试
-pub async fn run(target: &str, count: u32, timeout: Duration, timing: bool, proxy: Option<String>, no_proxy: bool, mode: OutputMode) {
+pub async fn run(target: &str, count: u32, timeout: Duration, timing: bool, proxy: Option<String>, no_proxy: bool, concurrency: usize, mode: OutputMode) {
     if target.starts_with("http://") || target.starts_with("https://") {
-        run_http(target, count, timeout, timing, proxy, no_proxy, mode).await;
+        run_http(target, count, timeout, timing, proxy, no_proxy, concurrency, mode).await;
     } else {
         run_tcp(target, count, timeout, mode).await;
     }
@@ -195,7 +195,7 @@ async fn run_tcp(target: &str, count: u32, connect_timeout: Duration, mode: Outp
 }
 
 /// HTTP 连通性测试（自动检测并使用系统代理）
-async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool, proxy: Option<String>, no_proxy: bool, mode: OutputMode) {
+async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool, proxy: Option<String>, no_proxy: bool, concurrency: usize, mode: OutputMode) {
     // 确定代理：--proxy 优先 > --no-proxy 强制直连 > 系统自动检测
     let proxy_addr = if let Some(ref p) = proxy {
         Some(p.clone())
@@ -209,108 +209,89 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
 
     let mut builder = reqwest::Client::builder().timeout(connect_timeout);
 
+    // 关键：始终先 no_proxy() 禁止 reqwest 自动读环境变量代理，
+    // 然后如果有显式代理再手动设上，确保 --proxy 失败时不会回退直连
+    builder = builder.no_proxy();
+
     if let Some(ref proxy_url) = proxy_addr {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
             builder = builder.proxy(proxy);
         }
-    } else {
-        builder = builder.no_proxy();
     }
 
     let client = builder.build().unwrap();
+    let proxy_tag = if proxy_addr.is_some() {
+        format!(" [{}]", t("diagnose.via_proxy"))
+    } else {
+        String::new()
+    };
+
+    let is_concurrent = concurrency > 1;
 
     let mut probes = Vec::new();
 
-    for i in 0..count {
-        if can_breakdown {
-            // 手动分步计时：DNS → TCP → TLS → TTFB
-            let probe = run_http_timing(url, connect_timeout, mode, i, count).await;
-            probes.push(probe);
-        } else {
-            // 降级模式：reqwest 单次计时
-            let start = Instant::now();
-            let result = client.get(url).send().await;
-            let elapsed = start.elapsed();
+    if is_concurrent {
+        // 并发模式：用 semaphore 控制并发数
+        use tokio::sync::Semaphore;
+        let sem = std::sync::Arc::new(Semaphore::new(concurrency));
+        let url = std::sync::Arc::new(url.to_string());
+        let client = std::sync::Arc::new(client);
 
-            match result {
-                Ok(resp) => {
-                    let status_code = resp.status().as_u16();
-                    let is_success = resp.status().is_success();
+        let mut handles = Vec::new();
+        for i in 0..count {
+            let sem = sem.clone();
+            let url = url.clone();
+            let client = client.clone();
+            let connect_timeout = connect_timeout;
+            let can_breakdown = can_breakdown;
 
-                    if mode == OutputMode::Table {
-                        let symbol = if is_success { "✓".green() } else { "⚠".yellow() };
-                        let proxy_tag = if proxy_addr.is_some() {
-                            format!(" [{}]", t("diagnose.via_proxy"))
-                        } else {
-                            String::new()
-                        };
-                        println!(
-                            "  [{}/{}] {} {}  {:.2}ms{}",
-                            i + 1,
-                            count,
-                            symbol,
-                            status_code,
-                            elapsed.as_secs_f64() * 1000.0,
-                            proxy_tag
-                        );
-                    }
-
-                    probes.push(CheckProbe {
-                        success: is_success,
-                        rtt_ms: elapsed.as_secs_f64() * 1000.0,
-                        status_code: Some(status_code),
-                        error: None,
-                        timing: None,
-                    });
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire_owned().await.unwrap();
+                if can_breakdown {
+                    run_http_timing(&url, connect_timeout, OutputMode::Json, i, count).await
+                } else {
+                    run_http_single(&client, &url, i, count).await
                 }
-                Err(e) => {
-                    let msg = if e.is_connect() {
-                        t("check.conn_fail")
-                    } else if e.is_timeout() {
-                        t("check.req_timeout")
-                    } else {
-                        e.to_string()
-                    };
-
-                    if mode == OutputMode::Table {
-                        let proxy_tag = if proxy_addr.is_some() {
-                            format!(" [{}]", t("diagnose.via_proxy"))
-                        } else {
-                            String::new()
-                        };
-                        println!(
-                            "  {}",
-                            format!(
-                                "[{}/{}] ✗ {}  {:.2}ms{}",
-                                i + 1,
-                                count,
-                                msg,
-                                elapsed.as_secs_f64() * 1000.0,
-                                proxy_tag
-                            ).red()
-                        );
-                    }
-
-                    probes.push(CheckProbe {
-                        success: false,
-                        rtt_ms: elapsed.as_secs_f64() * 1000.0,
-                        status_code: None,
-                        error: Some(msg),
-                        timing: None,
-                    });
-                }
-            }
+            }));
         }
 
-        if i + 1 < count {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        for handle in handles {
+            if let Ok(probe) = handle.await {
+                probes.push(probe);
+            }
+        }
+    } else {
+        // 串行模式
+        for i in 0..count {
+            if can_breakdown {
+                let probe = run_http_timing(url, connect_timeout, mode, i, count).await;
+                probes.push(probe);
+            } else {
+                let probe = run_http_single(&client, url, i, count).await;
+                if mode == OutputMode::Table {
+                    print_probe(&probe, i, count, &proxy_tag);
+                }
+                probes.push(probe);
+            }
+
+            if i + 1 < count {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+
+    // 并发模式下打印结果（按序号排序）
+    if is_concurrent && mode == OutputMode::Table {
+        probes.sort_by_key(|p| p.rtt_ms as u64); // 按延迟排序展示
+        for (i, probe) in probes.iter().enumerate() {
+            print_probe(probe, i as u32, count as u32, &proxy_tag);
         }
     }
 
     let stats = compute_stats(&probes);
     let output = CheckOutput {
         target: url.to_string(),
-        check_type: "http".to_string(),
+        check_type: if is_concurrent { "http-concurrent".to_string() } else { "http".to_string() },
         probes: probes.clone(),
         stats: stats.clone(),
     };
@@ -321,6 +302,107 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
     }
 
     print_stats(&stats, true);
+
+    // 并发模式额外显示并发统计
+    if is_concurrent {
+        print_concurrent_stats(&probes, concurrency);
+    }
+}
+
+/// 单次 HTTP 请求（reqwest，返回 CheckProbe，不打印）
+async fn run_http_single(client: &reqwest::Client, url: &str, _i: u32, _count: u32) -> CheckProbe {
+    let start = Instant::now();
+    let result = client.get(url).send().await;
+    let elapsed = start.elapsed();
+
+    match result {
+        Ok(resp) => {
+            let status_code = resp.status().as_u16();
+            let is_success = resp.status().is_success();
+            CheckProbe {
+                success: is_success,
+                rtt_ms: elapsed.as_secs_f64() * 1000.0,
+                status_code: Some(status_code),
+                error: None,
+                timing: None,
+            }
+        }
+        Err(e) => {
+            let msg = if e.is_connect() {
+                t("check.conn_fail")
+            } else if e.is_timeout() {
+                t("check.req_timeout")
+            } else {
+                e.to_string()
+            };
+            CheckProbe {
+                success: false,
+                rtt_ms: elapsed.as_secs_f64() * 1000.0,
+                status_code: None,
+                error: Some(msg),
+                timing: None,
+            }
+        }
+    }
+}
+
+/// 打印单次结果
+fn print_probe(probe: &CheckProbe, i: u32, count: u32, proxy_tag: &str) {
+    if probe.success {
+        let status = probe.status_code.unwrap_or(0);
+        let symbol = if (200..300).contains(&status) { "✓".green() } else { "⚠".yellow() };
+        println!(
+            "  [{}/{}] {} {}  {:.2}ms{}",
+            i + 1, count, symbol, status, probe.rtt_ms, proxy_tag
+        );
+        if let Some(ref tm) = probe.timing {
+            println!("    {:<10} {:.2}ms", t("check.timing_dns"), tm.dns_ms);
+            println!("    {:<10} {:.2}ms", t("check.timing_connect"), tm.connect_ms);
+            println!("    {:<10} {:.2}ms", t("check.timing_tls"), tm.tls_ms);
+            println!("    {:<10} {:.2}ms", t("check.timing_ttfb"), tm.ttfb_ms);
+            println!("    {:<10} {:.2}ms", t("check.timing_total"), tm.total_ms);
+        }
+    } else {
+        let msg = probe.error.as_deref().unwrap_or("unknown");
+        println!(
+            "  {}",
+            format!("[{}/{}] ✗ {}  {:.2}ms{}", i + 1, count, msg, probe.rtt_ms, proxy_tag).red()
+        );
+    }
+}
+
+/// 打印并发统计
+fn print_concurrent_stats(probes: &[CheckProbe], concurrency: usize) {
+    println!();
+    let success = probes.iter().filter(|p| p.success).count();
+    let total = probes.len();
+    let rtts: Vec<f64> = probes.iter().filter(|p| p.success).map(|p| p.rtt_ms).collect();
+
+    let h_metric = t("common.metric");
+    let h_value = t("proxy.value");
+    let headers = [h_metric.as_str(), h_value.as_str()];
+    let mut rows = Vec::new();
+    rows.push(vec![t("check.concurrency"), concurrency.to_string()]);
+    rows.push(vec![t("check.total_reqs"), total.to_string()]);
+    rows.push(vec![t("check.success_reqs"), success.to_string()]);
+    rows.push(vec![t("check.fail_reqs"), (total - success).to_string()]);
+
+    if !rtts.is_empty() {
+        let stats = crate::util::compute_stats(&rtts);
+        if let (Some(min), Some(max), Some(avg)) = (stats.min_ms, stats.max_ms, stats.avg_ms) {
+            rows.push(vec![t("ping.min"), format!("{:.2}ms", min)]);
+            rows.push(vec![t("ping.max"), format!("{:.2}ms", max)]);
+            rows.push(vec![t("ping.avg"), format!("{:.2}ms", avg)]);
+            // QPS: 成功请求数 / 最大延迟（秒）
+            let max_sec = max / 1000.0;
+            if max_sec > 0.0 {
+                let qps = success as f64 / max_sec;
+                rows.push(vec![t("check.qps"), format!("{:.1}", qps)]);
+            }
+        }
+    }
+
+    print_table(&headers, &rows);
 }
 
 /// 手动分步计时 HTTPS 请求（DNS → TCP → TLS → TTFB）
