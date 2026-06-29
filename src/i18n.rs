@@ -254,6 +254,7 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         ("connections.state", "状态", "State"),
         ("connections.pid", "PID", "PID"),
         ("connections.process", "进程", "Process"),
+        ("connections.proxy_col", "代理", "Proxy"),
         ("connections.no_result", "未找到连接", "No connections found"),
         ("connections.summary", "共 {0} 个连接（{1} TCP, {2} UDP）", "{0} connections ({1} TCP, {2} UDP)"),
         ("connections.no_admin", "注意：非管理员权限下进程信息可能不完整", "Note: process info may be incomplete without admin privileges"),
@@ -342,12 +343,6 @@ pub fn t1(key: &str, a: &str) -> String {
 /// 获取翻译文本（带两个格式化参数）
 pub fn t2(key: &str, a: &str, b: &str) -> String {
     t(key).replace("{0}", a).replace("{1}", b)
-}
-
-/// 获取翻译文本（带三个格式化参数）
-#[allow(dead_code)]
-pub fn t3(key: &str, a: &str, b: &str, c: &str) -> String {
-    t(key).replace("{0}", a).replace("{1}", b).replace("{2}", c)
 }
 
 /// 获取翻译文本（带四个格式化参数）

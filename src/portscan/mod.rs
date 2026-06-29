@@ -15,7 +15,6 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
-const MAX_CONCURRENT: usize = 100;
 
 const COMMON_PORTS: &[(u16, &str)] = &[
     (21, "FTP"), (22, "SSH"), (23, "Telnet"), (25, "SMTP"),
@@ -45,7 +44,7 @@ pub struct ScanOutput {
 }
 
 /// 执行端口扫描并输出结果
-pub async fn run(host: &str, ports: Option<&[u16]>, mode: OutputMode) {
+pub async fn run(host: &str, ports: Option<&[u16]>, concurrency: usize, mode: OutputMode) {
     // 解析主机
     let target = match crate::util::resolve_host(host).await {
         Some(ip) => ip,
@@ -65,7 +64,7 @@ pub async fn run(host: &str, ports: Option<&[u16]>, mode: OutputMode) {
         None => COMMON_PORTS.iter().map(|(p, _)| *p).collect(),
     };
 
-    let semaphore = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT));
+    let semaphore = std::sync::Arc::new(Semaphore::new(concurrency));
     let mut handles = Vec::new();
 
     for port in &port_list {
@@ -106,7 +105,7 @@ pub async fn run(host: &str, ports: Option<&[u16]>, mode: OutputMode) {
     println!("  {}", t2("scan.target", host, &target.to_string()));
     println!(
         "  {}",
-        t2("scan.info", &port_list.len().to_string(), &MAX_CONCURRENT.to_string())
+        t2("scan.info", &port_list.len().to_string(), &concurrency.to_string())
     );
     println!();
 

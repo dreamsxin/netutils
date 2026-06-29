@@ -37,17 +37,17 @@ const TRACE_MAX_HOPS: u32 = 10;
 pub async fn run(host: &str, mode: OutputMode) {
     let start = Instant::now();
 
-    // 步骤 ①②③④ 并行执行
-    let (dns, ping, tcp, https) = tokio::join!(
+    // 预解析 IP（供 traceroute 使用，也用于报告）
+    let target_ip = crate::util::resolve_host(host).await;
+
+    // 5 个步骤全部并行执行
+    let (dns, ping, tcp, https, trace) = tokio::join!(
         check_dns(host),
         check_ping(host),
         check_tcp(host),
         check_https(host),
+        check_trace(host, target_ip),
     );
-
-    // 步骤 ⑤ Traceroute 串行（最慢，放最后）
-    let target_ip = dns_target_ip(&dns);
-    let trace = check_trace(host, target_ip).await;
 
     let steps = vec![dns, ping, tcp, https, trace];
     let conclusion = derive_conclusion(&steps);
@@ -97,20 +97,6 @@ pub async fn run(host: &str, mode: OutputMode) {
     println!("  {}", t1("diagnose.elapsed", &format!("{:.1}", elapsed.as_secs_f64())));
 }
 
-/// 从 DNS 步骤提取解析到的 IP
-fn dns_target_ip(dns: &DiagStep) -> Option<IpAddr> {
-    if !dns.ok {
-        return None;
-    }
-    // 从 message 中提取 IP（格式: "系统 DNS: host → IP (Xms)" 或 "System DNS: host → IP (Xms)"）
-    let msg = &dns.message;
-    // 找 "→ " 后面的部分
-    let after_arrow = msg.split("→ ").nth(1)?;
-    // 取 " (" 之前的部分作为 IP
-    let ip_str = after_arrow.split(" (").next()?.trim();
-    ip_str.parse().ok()
-}
-
 // ═══════════════════════════════════════════════════════════════
 //  检测步骤
 // ═══════════════════════════════════════════════════════════════
@@ -153,9 +139,9 @@ async fn check_ping(host: &str) -> DiagStep {
     };
 
     // ICMP 优先，失败回退 TCP
-    let probes = match crate::ping::surge_ping_probe(target, PING_COUNT).await {
+    let probes = match crate::ping::surge_ping_probe(target, PING_COUNT, Duration::from_secs(2)).await {
         Some(r) => r,
-        None => crate::ping::tcp_ping_probe(target, PING_COUNT).await,
+        None => crate::ping::tcp_ping_probe(target, PING_COUNT, Duration::from_secs(2)).await,
     };
 
     let success_count = probes.iter().filter(|p| p.success).count();
@@ -350,7 +336,7 @@ async fn trace_hop_simple(target: std::net::Ipv4Addr, ttl: u32) -> SimpleHop {
 
     let ident = (std::process::id() & 0xFFFF) as u16;
     let seq = (ttl * 10) as u16;
-    let packet = build_icmp_echo_request(ident, seq);
+    let packet = crate::icmp::build_icmp_echo_request(ident, seq);
 
     let dest = SocketAddr::new(IpAddr::V4(target), 0);
     if socket.send_to(&packet, &dest.into()).is_err() {
@@ -367,82 +353,12 @@ async fn trace_hop_simple(target: std::net::Ipv4Addr, ttl: u32) -> SimpleHop {
                 };
                 let data: &[u8] =
                     unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len) };
-                if parse_icmp_response(data, ident, seq).is_some() {
+                if crate::icmp::parse_icmp_response(data, ident, seq).is_some() {
                     return SimpleHop { reached: from_ip == IpAddr::V4(target) };
                 }
             }
             Err(_) => return SimpleHop { reached: false },
         }
-    }
-}
-
-/// 构造 ICMP Echo Request 包
-fn build_icmp_echo_request(ident: u16, seq: u16) -> Vec<u8> {
-    let mut packet = vec![0u8; 8 + 32];
-    packet[0] = 8; // Echo Request
-    packet[1] = 0;
-    packet[4] = (ident >> 8) as u8;
-    packet[5] = (ident & 0xFF) as u8;
-    packet[6] = (seq >> 8) as u8;
-    packet[7] = (seq & 0xFF) as u8;
-    for i in 0..32 {
-        packet[8 + i] = i as u8;
-    }
-    let checksum = icmp_checksum(&packet);
-    packet[2] = (checksum >> 8) as u8;
-    packet[3] = (checksum & 0xFF) as u8;
-    packet
-}
-
-fn icmp_checksum(data: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    let mut i = 0;
-    while i + 1 < data.len() {
-        sum += ((data[i] as u32) << 8) | (data[i + 1] as u32);
-        i += 2;
-    }
-    if i < data.len() {
-        sum += (data[i] as u32) << 8;
-    }
-    while (sum >> 16) != 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    !(sum as u16)
-}
-
-fn parse_icmp_response(buf: &[u8], ident: u16, seq: u16) -> Option<()> {
-    if buf.len() < 20 {
-        return None;
-    }
-    let ihl = ((buf[0] & 0x0F) * 4) as usize;
-    if buf.len() < ihl + 8 {
-        return None;
-    }
-    let icmp_type = buf[ihl];
-    match icmp_type {
-        0 => {
-            let recv_ident = u16::from_be_bytes([buf[ihl + 4], buf[ihl + 5]]);
-            let recv_seq = u16::from_be_bytes([buf[ihl + 6], buf[ihl + 7]]);
-            if recv_ident == ident && recv_seq == seq { Some(()) } else { None }
-        }
-        11 => {
-            let inner_start = ihl + 8;
-            if buf.len() < inner_start + 20 + 8 {
-                return Some(());
-            }
-            let inner_ihl = ((buf[inner_start] & 0x0F) * 4) as usize;
-            let icmp_offset = inner_start + inner_ihl;
-            if buf.len() < icmp_offset + 8 {
-                return Some(());
-            }
-            if buf[icmp_offset] != 8 {
-                return None;
-            }
-            let orig_ident = u16::from_be_bytes([buf[icmp_offset + 4], buf[icmp_offset + 5]]);
-            let orig_seq = u16::from_be_bytes([buf[icmp_offset + 6], buf[icmp_offset + 7]]);
-            if orig_ident == ident && orig_seq == seq { Some(()) } else { None }
-        }
-        _ => None,
     }
 }
 
@@ -473,14 +389,14 @@ fn derive_conclusion(steps: &[DiagStep]) -> String {
     t("diagnose.conclusion_healthy")
 }
 
-/// 构建链路状态链（DNS → Ping → TCP → HTTPS）
+/// 构建链路状态链（DNS → Ping → TCP → HTTPS → Trace）
 fn build_chain(steps: &[DiagStep]) -> String {
-    let labels = ["DNS", "Ping", "TCP", "HTTPS"];
+    let labels = ["DNS", "Ping", "TCP", "HTTPS", "Trace"];
     let arrow = " → ";
 
     steps
         .iter()
-        .take(4)
+        .take(5)
         .enumerate()
         .map(|(i, step)| {
             let label = labels.get(i).unwrap_or(&"?");

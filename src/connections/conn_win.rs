@@ -56,6 +56,7 @@ Get-NetUDPEndpoint -ErrorAction SilentlyContinue | ForEach-Object {
                 state,
                 pid,
                 process_name,
+                is_proxy: false,
             });
         }
     }

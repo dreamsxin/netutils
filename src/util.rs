@@ -49,12 +49,6 @@ pub fn compute_stats(rtts: &[f64]) -> Stats {
     }
 }
 
-/// 格式化延迟为字符串
-#[allow(dead_code)]
-pub fn fmt_ms(ms: f64) -> String {
-    format!("{:.2}ms", ms)
-}
-
 /// 获取系统代理地址（Windows 注册表 或 环境变量）
 /// 返回格式化的代理 URL，如 "http://127.0.0.1:7897"
 pub fn get_system_proxy_addr() -> Option<String> {

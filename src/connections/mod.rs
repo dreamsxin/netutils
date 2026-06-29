@@ -15,6 +15,7 @@ pub struct ConnectionInfo {
     pub state: String,
     pub pid: u32,
     pub process_name: String,
+    pub is_proxy: bool,
 }
 
 /// 连接列表完整输出
@@ -31,6 +32,7 @@ pub struct ConnFilter {
     pub state: Option<String>,
     pub port: Option<u16>,
     pub process: Option<String>,
+    pub proto: Option<String>,
 }
 
 // 平台分发
@@ -122,6 +124,7 @@ pub fn parse_ss_output(text: &str) -> Vec<ConnectionInfo> {
             state,
             pid,
             process_name,
+            is_proxy: false,
         });
     }
 
@@ -185,6 +188,7 @@ pub fn parse_netstat_output(text: &str) -> Vec<ConnectionInfo> {
             state,
             pid,
             process_name,
+            is_proxy: false,
         });
     }
 
@@ -246,6 +250,7 @@ pub fn parse_lsof_output(text: &str) -> Vec<ConnectionInfo> {
             state,
             pid,
             process_name,
+            is_proxy: false,
         });
     }
 
@@ -472,9 +477,34 @@ sshd    890 root 3u  IPv4  0x10000       0t0  50000 TCP *:22 (LISTEN)
     }
 }
 
+/// 从系统代理地址中提取端口号
+fn detect_proxy_port() -> Option<u16> {
+    let proxy_addr = crate::util::get_system_proxy_addr()?;
+    // 从 "http://127.0.0.1:7897" 提取端口
+    proxy_addr.rsplit(':').next()?.parse().ok()
+}
+
 /// 执行连接列表命令
 pub fn run(filter: ConnFilter, mode: OutputMode) {
     let mut connections = get_connections();
+
+    // 检测代理相关连接
+    let proxy_port = detect_proxy_port();
+    let proxy_keywords = ["mihomo", "clash", "v2ray", "xray", "sing-box", "trojan", "ssr", "shadowsocks"];
+    for c in &mut connections {
+        // 进程名匹配代理工具
+        let proc_lower = c.process_name.to_lowercase();
+        if proxy_keywords.iter().any(|kw| proc_lower.contains(kw)) {
+            c.is_proxy = true;
+            continue;
+        }
+        // 本地端口匹配代理端口
+        if let Some(port) = proxy_port {
+            if c.local_addr.ends_with(&format!(":{}", port)) {
+                c.is_proxy = true;
+            }
+        }
+    }
 
     // 应用过滤
     if let Some(ref state) = filter.state {
@@ -490,6 +520,10 @@ pub fn run(filter: ConnFilter, mode: OutputMode) {
     if let Some(ref process) = filter.process {
         let process_lower = process.to_lowercase();
         connections.retain(|c| c.process_name.to_lowercase().contains(&process_lower));
+    }
+    if let Some(ref proto) = filter.proto {
+        let proto_upper = proto.to_uppercase();
+        connections.retain(|c| c.protocol == proto_upper);
     }
 
     let tcp_count = connections.iter().filter(|c| c.protocol == "TCP").count();
@@ -521,6 +555,7 @@ pub fn run(filter: ConnFilter, mode: OutputMode) {
         let h_state = t("connections.state");
         let h_pid = t("connections.pid");
         let h_process = t("connections.process");
+        let h_proxy = t("connections.proxy_col");
 
         let headers = [
             h_proto.as_str(),
@@ -529,6 +564,7 @@ pub fn run(filter: ConnFilter, mode: OutputMode) {
             h_state.as_str(),
             h_pid.as_str(),
             h_process.as_str(),
+            h_proxy.as_str(),
         ];
 
         let rows: Vec<Vec<String>> = connections
@@ -541,6 +577,7 @@ pub fn run(filter: ConnFilter, mode: OutputMode) {
                     c.state.clone(),
                     c.pid.to_string(),
                     c.process_name.clone(),
+                    if c.is_proxy { "代理".to_string() } else { "".to_string() },
                 ]
             })
             .collect();

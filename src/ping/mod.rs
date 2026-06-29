@@ -40,7 +40,7 @@ pub struct PingOutput {
 }
 
 /// 执行 ping 并输出结果
-pub async fn run(host: &str, count: u32, mode: OutputMode) {
+pub async fn run(host: &str, count: u32, timeout: Duration, interval: Duration, mode: OutputMode) {
     // 解析主机
     let target = match crate::util::resolve_host(host).await {
         Some(ip) => ip,
@@ -56,13 +56,13 @@ pub async fn run(host: &str, count: u32, mode: OutputMode) {
     };
 
     // 先尝试 ICMP ping
-    let probes = match surge_ping_probe(target, count).await {
+    let probes = match surge_ping_probe(target, count, timeout).await {
         Some(r) => r,
         None => {
             if mode == OutputMode::Table {
                 println!("  {}", t("ping.icmp_fallback").yellow());
             }
-            tcp_ping_probe(target, count).await
+            tcp_ping_probe(target, count, timeout).await
         }
     };
 
@@ -87,7 +87,7 @@ pub async fn run(host: &str, count: u32, mode: OutputMode) {
     for probe in &probes {
         print_ping_line(host, probe);
         if probe.seq + 1 < count {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(interval).await;
         }
     }
 
@@ -165,7 +165,7 @@ fn print_ping_stats(stats: &PingStats) {
 }
 
 /// ICMP ping（需要权限），返回探测结果
-pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32) -> Option<Vec<ProbeResult>> {
+pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32, _timeout: Duration) -> Option<Vec<ProbeResult>> {
     use surge_ping::{Client, ConfigBuilder, PingIdentifier, PingSequence};
 
     let client = match Client::new(&ConfigBuilder::default().build()) {
@@ -205,7 +205,7 @@ pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32) -> Op
 }
 
 /// TCP ping 回退方案（连接 80 端口测延迟）
-pub(crate) async fn tcp_ping_probe(target: std::net::IpAddr, count: u32) -> Vec<ProbeResult> {
+pub(crate) async fn tcp_ping_probe(target: std::net::IpAddr, count: u32, timeout: Duration) -> Vec<ProbeResult> {
     use tokio::net::TcpStream;
 
     let mut results = Vec::new();
@@ -213,7 +213,7 @@ pub(crate) async fn tcp_ping_probe(target: std::net::IpAddr, count: u32) -> Vec<
     for seq in 0..count {
         let start = Instant::now();
         let addr = format!("{}:80", target);
-        let result = tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await;
+        let result = tokio::time::timeout(timeout, TcpStream::connect(&addr)).await;
 
         match result {
             Ok(Ok(_stream)) => {

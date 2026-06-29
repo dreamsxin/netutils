@@ -51,6 +51,12 @@ pub enum Commands {
         /// 发送包数（默认 4）
         #[arg(short, long, default_value_t = 4)]
         count: u32,
+        /// 单次探测超时秒数（默认 2）
+        #[arg(long, default_value_t = 2)]
+        timeout: u64,
+        /// 探测间隔秒数（默认 1）
+        #[arg(long, default_value_t = 1)]
+        interval: u64,
     },
 
     /// DNS 查询
@@ -61,6 +67,9 @@ pub enum Commands {
         /// 记录类型（默认 A）
         #[arg(short, long, value_enum, default_value_t = DnsRecordType::A)]
         r#type: DnsRecordType,
+        /// 指定 DNS 服务器（如 8.8.8.8）
+        #[arg(long)]
+        server: Option<String>,
     },
 
     /// 路由追踪（TTL 递增）
@@ -68,6 +77,9 @@ pub enum Commands {
     Trace {
         /// 目标主机名或 IP
         host: String,
+        /// 最大跳数（默认 30）
+        #[arg(long, default_value_t = 30)]
+        max_hops: u32,
     },
 
     /// 端口扫描（并发 TCP connect）
@@ -77,6 +89,9 @@ pub enum Commands {
         host: String,
         /// 端口列表，逗号分隔（如 80,443,8080），不指定则扫描常见端口
         ports: Option<String>,
+        /// 并发数（默认 100）
+        #[arg(long, default_value_t = 100)]
+        concurrency: usize,
     },
 
     /// 连通性测试（TCP 端口 / HTTP URL）
@@ -87,6 +102,9 @@ pub enum Commands {
         /// 测试次数（默认 4）
         #[arg(short, long, default_value_t = 4)]
         count: u32,
+        /// 连接超时秒数（默认 5）
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
     },
 
     /// 列出当前网络连接（TCP/UDP）
@@ -101,6 +119,9 @@ pub enum Commands {
         /// 按进程名过滤
         #[arg(long)]
         process: Option<String>,
+        /// 按协议过滤（tcp/udp）
+        #[arg(long)]
+        proto: Option<String>,
     },
 
     /// 一键诊断（组合检测，给出结论）

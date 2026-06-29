@@ -9,7 +9,6 @@ use crate::i18n::t;
 use crate::output::{print_json, print_json_error, OutputMode};
 use crate::table::print_table;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 单次测试结果
 #[derive(Serialize, Clone)]
@@ -40,11 +39,11 @@ pub struct CheckStats {
 }
 
 /// 执行连通性测试
-pub async fn run(target: &str, count: u32, mode: OutputMode) {
+pub async fn run(target: &str, count: u32, timeout: Duration, mode: OutputMode) {
     if target.starts_with("http://") || target.starts_with("https://") {
-        run_http(target, count, mode).await;
+        run_http(target, count, timeout, mode).await;
     } else {
-        run_tcp(target, count, mode).await;
+        run_tcp(target, count, timeout, mode).await;
     }
 }
 
@@ -68,7 +67,7 @@ pub(crate) fn parse_host_port(target: &str) -> Option<(String, u16)> {
 }
 
 /// TCP 连通性测试
-async fn run_tcp(target: &str, count: u32, mode: OutputMode) {
+async fn run_tcp(target: &str, count: u32, connect_timeout: Duration, mode: OutputMode) {
     use tokio::net::TcpStream;
     use tokio::time::timeout;
 
@@ -89,7 +88,7 @@ async fn run_tcp(target: &str, count: u32, mode: OutputMode) {
     for i in 0..count {
         let start = Instant::now();
         let addr = format!("{}:{}", host, port);
-        let result = timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await;
+        let result = timeout(connect_timeout, TcpStream::connect(&addr)).await;
         let elapsed = start.elapsed();
 
         match result {
@@ -136,13 +135,13 @@ async fn run_tcp(target: &str, count: u32, mode: OutputMode) {
                         t("check.tcp_timeout")
                             .replace("{0}", &(i + 1).to_string())
                             .replace("{1}", &count.to_string())
-                            .replace("{2}", &CONNECT_TIMEOUT.as_secs().to_string())
+                            .replace("{2}", &connect_timeout.as_secs().to_string())
                             .red()
                     );
                 }
                 probes.push(CheckProbe {
                     success: false,
-                    rtt_ms: CONNECT_TIMEOUT.as_secs_f64() * 1000.0,
+                    rtt_ms: connect_timeout.as_secs_f64() * 1000.0,
                     status_code: None,
                     error: Some(t("check.req_timeout")),
                 });
@@ -171,9 +170,9 @@ async fn run_tcp(target: &str, count: u32, mode: OutputMode) {
 }
 
 /// HTTP 连通性测试（自动检测并使用系统代理）
-async fn run_http(url: &str, count: u32, mode: OutputMode) {
+async fn run_http(url: &str, count: u32, connect_timeout: Duration, mode: OutputMode) {
     let proxy_addr = crate::util::get_system_proxy_addr();
-    let mut builder = reqwest::Client::builder().timeout(CONNECT_TIMEOUT);
+    let mut builder = reqwest::Client::builder().timeout(connect_timeout);
 
     if let Some(ref proxy_url) = proxy_addr {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
