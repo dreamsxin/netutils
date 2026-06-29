@@ -244,6 +244,12 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
         ("check.ok", "成功", "OK"),
         ("check.fail_count", "失败/错误", "Failed"),
         ("check.ok_2xx", "成功 (2xx)", "OK (2xx)"),
+        ("check.timing_dns", "DNS 解析", "DNS"),
+        ("check.timing_connect", "TCP 连接", "Connect"),
+        ("check.timing_tls", "TLS 握手", "TLS"),
+        ("check.timing_ttfb", "首字节", "TTFB"),
+        ("check.timing_total", "总计", "Total"),
+        ("check.timing_unsupported", "（代理/HTTP 模式不支持分解，仅直连 HTTPS 可用）", "(breakdown unavailable with proxy/HTTP, direct HTTPS only)"),
 
         // ── diag ──
         // ── connections ──

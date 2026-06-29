@@ -105,6 +105,15 @@ pub enum Commands {
         /// 连接超时秒数（默认 5）
         #[arg(long, default_value_t = 5)]
         timeout: u64,
+        /// 显示分阶段耗时 (DNS/Connect/TLS/TTFB)，仅直连 HTTPS
+        #[arg(long)]
+        timing: bool,
+        /// 指定代理（如 http://127.0.0.1:7897）
+        #[arg(long)]
+        proxy: Option<String>,
+        /// 强制直连，忽略系统代理
+        #[arg(long)]
+        no_proxy: bool,
     },
 
     /// 列出当前网络连接（TCP/UDP）
