@@ -1,8 +1,10 @@
 //! Windows 路由表实现（PowerShell Get-NetRoute）。
 
-use std::process::Command;
+use std::time::Duration;
 
 use super::route::RouteEntry;
+
+const POWERSHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 从路由表获取所有默认路由 (网关, 接口名)
 pub fn get_default_routes() -> Vec<(String, String)> {
@@ -13,7 +15,7 @@ pub fn get_default_routes() -> Vec<(String, String)> {
 Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { "$($_.NextHop)|$($_.InterfaceAlias)" }
 "#;
 
-    if let Ok(output) = Command::new("powershell").args(["-Command", ps_script]).output() {
+    if let Some(output) = crate::util::powershell_output(ps_script, POWERSHELL_TIMEOUT) {
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
             if let Some((gw, iface)) = line.split_once('|') {
@@ -38,7 +40,7 @@ Get-NetRoute -ErrorAction SilentlyContinue | Where-Object {
 }
 "#;
 
-    if let Ok(output) = Command::new("powershell").args(["-Command", ps_script]).output() {
+    if let Some(output) = crate::util::powershell_output(ps_script, POWERSHELL_TIMEOUT) {
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
             let parts: Vec<&str> = line.splitn(4, '|').collect();

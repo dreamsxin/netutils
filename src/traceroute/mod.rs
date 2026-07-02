@@ -92,7 +92,13 @@ pub async fn run(host: &str, max_hops: u32, mode: OutputMode) {
     let h_p1 = t1("trace.probe", "1");
     let h_p2 = t1("trace.probe", "2");
     let h_p3 = t1("trace.probe", "3");
-    let headers = [h_hop.as_str(), h_ip.as_str(), h_p1.as_str(), h_p2.as_str(), h_p3.as_str()];
+    let headers = [
+        h_hop.as_str(),
+        h_ip.as_str(),
+        h_p1.as_str(),
+        h_p2.as_str(),
+        h_p3.as_str(),
+    ];
 
     let rows: Vec<Vec<String>> = hops
         .iter()
@@ -122,7 +128,10 @@ pub async fn run(host: &str, max_hops: u32, mode: OutputMode) {
 
     if !reached_dest {
         println!();
-        println!("  {}", t1("trace.not_reached", &max_hops.to_string()).yellow());
+        println!(
+            "  {}",
+            t1("trace.not_reached", &max_hops.to_string()).yellow()
+        );
     }
 }
 
@@ -179,7 +188,7 @@ async fn send_probe_v4(target: Ipv4Addr, ttl: u32, probe_seq: u32) -> Option<(Ip
     socket.send_to(&packet, &dest.into()).ok()?;
 
     let mut buf = [MaybeUninit::new(0); 1024];
-    loop {
+    while start.elapsed() < TIMEOUT {
         match socket.recv_from(&mut buf) {
             Ok((len, from)) => {
                 let from_ip = from.as_socket().map(|s| s.ip())?;
@@ -192,4 +201,6 @@ async fn send_probe_v4(target: Ipv4Addr, ttl: u32, probe_seq: u32) -> Option<(Ip
             Err(_) => return None,
         }
     }
+
+    None
 }

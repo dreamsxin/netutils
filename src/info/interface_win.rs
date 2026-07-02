@@ -1,8 +1,9 @@
-//! Windows 网络接口实现（PowerShell Get-NetAdapter）。
-
-use std::process::Command;
+//! Windows 网络接口实现（PowerShell CIM）。
+use std::time::Duration;
 
 use super::interface::{classify_interface, InterfaceInfo};
+
+const POWERSHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 从 PowerShell 获取所有网络接口信息（含接口跃点）
 pub fn get_all_interfaces() -> Vec<InterfaceInfo> {
@@ -10,23 +11,29 @@ pub fn get_all_interfaces() -> Vec<InterfaceInfo> {
 
     let ps_script = r#"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Get-NetAdapter | ForEach-Object {
-    $adapter = $_
-    $ip = Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
-    $metric = Get-NetIPInterface -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
-    [PSCustomObject]@{
-        Name = $adapter.InterfaceAlias
-        MAC = $adapter.MacAddress
-        IPv4 = if ($ip) { $ip.IPAddress } else { "--" }
-        Status = $adapter.Status
-        Type = $adapter.InterfaceDescription
-        Index = $adapter.ifIndex
-        Metric = if ($metric) { $metric.InterfaceMetric } else { 0 }
+$configs = @{}
+Get-CimInstance Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($null -ne $_.InterfaceIndex) {
+        $configs[[int]$_.InterfaceIndex] = $_
     }
-} | ForEach-Object { "$($_.Name)|$($_.MAC)|$($_.IPv4)|$($_.Status)|$($_.Type)|$($_.Index)|$($_.Metric)" }
+}
+Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue | Where-Object {
+    $_.NetConnectionID
+} | ForEach-Object {
+    $adapter = $_
+    $cfg = $configs[[int]$adapter.InterfaceIndex]
+    $ipv4 = "--"
+    if ($cfg -and $cfg.IPAddress) {
+        $first = @($cfg.IPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1)
+        if ($first.Count -gt 0) { $ipv4 = $first[0] }
+    }
+    $status = if ($adapter.NetConnectionStatus -eq 2) { "Up" } else { "Down" }
+    $metric = if ($cfg -and $cfg.IPConnectionMetric) { $cfg.IPConnectionMetric } else { 0 }
+    "$($adapter.NetConnectionID)|$($adapter.MACAddress)|$ipv4|$status|$($adapter.Description)|$($adapter.InterfaceIndex)|$metric"
+}
 "#;
 
-    if let Ok(output) = Command::new("powershell").args(["-Command", ps_script]).output() {
+    if let Some(output) = crate::util::powershell_output(ps_script, POWERSHELL_TIMEOUT) {
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
             let parts: Vec<&str> = line.splitn(7, '|').collect();

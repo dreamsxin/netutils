@@ -82,7 +82,12 @@ pub async fn run(host: &str, count: u32, timeout: Duration, interval: Duration, 
     // 表格输出
     println!();
     println!("{}", t("ping.title").replace("{0}", host).bold());
-    println!("  {}", t("ping.target").replace("{0}", host).replace("{1}", &target.to_string()));
+    println!(
+        "  {}",
+        t("ping.target")
+            .replace("{0}", host)
+            .replace("{1}", &target.to_string())
+    );
 
     for probe in &probes {
         print_ping_line(host, probe);
@@ -151,7 +156,10 @@ fn print_ping_stats(stats: &PingStats) {
     rows.push(vec![t("ping.sent"), stats.sent.to_string()]);
     rows.push(vec![t("ping.recv"), stats.received.to_string()]);
     rows.push(vec![t("ping.lost"), stats.lost.to_string()]);
-    rows.push(vec![t("ping.loss_rate"), format!("{:.1}%", stats.loss_rate)]);
+    rows.push(vec![
+        t("ping.loss_rate"),
+        format!("{:.1}%", stats.loss_rate),
+    ]);
 
     if let (Some(min), Some(max), Some(avg)) = (stats.min_ms, stats.max_ms, stats.avg_ms) {
         rows.push(vec![t("ping.min"), format!("{:.2}ms", min)]);
@@ -165,7 +173,11 @@ fn print_ping_stats(stats: &PingStats) {
 }
 
 /// ICMP ping（需要权限），返回探测结果
-pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32, _timeout: Duration) -> Option<Vec<ProbeResult>> {
+pub(crate) async fn surge_ping_probe(
+    target: std::net::IpAddr,
+    count: u32,
+    timeout: Duration,
+) -> Option<Vec<ProbeResult>> {
     use surge_ping::{Client, ConfigBuilder, PingIdentifier, PingSequence};
 
     let client = match Client::new(&ConfigBuilder::default().build()) {
@@ -174,15 +186,17 @@ pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32, _time
     };
 
     let identifier = PingIdentifier(std::process::id() as u16);
+    let timeout = timeout.max(Duration::from_millis(1));
     let mut results = Vec::new();
 
     for seq in 0..count {
         let payload = [0u8; 32];
         let mut pinger = client.pinger(target, identifier).await;
-        let result = pinger.ping(PingSequence(seq as u16), &payload).await;
+        let result =
+            tokio::time::timeout(timeout, pinger.ping(PingSequence(seq as u16), &payload)).await;
 
         match result {
-            Ok((_, rtt)) => {
+            Ok(Ok((_, rtt))) => {
                 results.push(ProbeResult {
                     seq,
                     success: true,
@@ -190,12 +204,20 @@ pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32, _time
                     error: None,
                 });
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 results.push(ProbeResult {
                     seq,
                     success: false,
                     rtt_ms: None,
                     error: Some(format!("{}", e)),
+                });
+            }
+            Err(_) => {
+                results.push(ProbeResult {
+                    seq,
+                    success: false,
+                    rtt_ms: None,
+                    error: Some(t("ping.timeout")),
                 });
             }
         }
@@ -205,15 +227,20 @@ pub(crate) async fn surge_ping_probe(target: std::net::IpAddr, count: u32, _time
 }
 
 /// TCP ping 回退方案（连接 80 端口测延迟）
-pub(crate) async fn tcp_ping_probe(target: std::net::IpAddr, count: u32, timeout: Duration) -> Vec<ProbeResult> {
+pub(crate) async fn tcp_ping_probe(
+    target: std::net::IpAddr,
+    count: u32,
+    timeout: Duration,
+) -> Vec<ProbeResult> {
+    use std::net::SocketAddr;
     use tokio::net::TcpStream;
 
     let mut results = Vec::new();
 
     for seq in 0..count {
         let start = Instant::now();
-        let addr = format!("{}:80", target);
-        let result = tokio::time::timeout(timeout, TcpStream::connect(&addr)).await;
+        let addr = SocketAddr::new(target, 80);
+        let result = tokio::time::timeout(timeout, TcpStream::connect(addr)).await;
 
         match result {
             Ok(Ok(_stream)) => {

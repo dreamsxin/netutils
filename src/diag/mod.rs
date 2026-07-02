@@ -8,6 +8,10 @@ use serde::Serialize;
 use crate::i18n::{t, t1, t2};
 use crate::output::{print_json, OutputMode};
 
+const DIAG_DNS_TIMEOUT: Duration = Duration::from_secs(5);
+const DIAG_GATEWAY_TIMEOUT: Duration = Duration::from_secs(2);
+const DIAG_IPV6_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// 单项诊断结果
 #[derive(Serialize, Clone)]
 pub struct DiagItem {
@@ -29,27 +33,42 @@ pub struct DiagReport {
 pub async fn run(mode: OutputMode) {
     let start = Instant::now();
 
-    // 全部并行执行，取最慢的一个的耗时
-    let (egress, dns_cn, dns_global, gateway, proxy, http_cn, http_global, ipv6) = tokio::join!(
-        check_egress(),
-        check_dns_single("baidu.com"),
-        check_dns_single("google.com"),
-        check_gateway(),
-        async { check_proxy_status() },
-        check_http_single("https://www.baidu.com"),
-        check_http_single("https://www.google.com"),
-        check_ipv6(),
-    );
+    if mode == OutputMode::Table {
+        println!();
+        println!("{}  {}", t("diag.title").bold(), current_timestamp().cyan());
+        println!();
+        println!("  {}...", t("diag.running").dimmed());
+    }
+
+    // 各检测并行执行，完成后立即打印
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(check_egress());
+    tasks.spawn(check_dns_single("baidu.com"));
+    tasks.spawn(check_dns_single("google.com"));
+    tasks.spawn(check_gateway());
+    tasks.spawn(async { check_proxy_status() });
+    tasks.spawn(check_http_single("https://www.baidu.com"));
+    tasks.spawn(check_http_single("https://www.google.com"));
+    tasks.spawn(check_ipv6());
 
     let mut items = Vec::new();
-    items.push(egress);
-    items.push(dns_cn);
-    items.push(dns_global);
-    items.push(gateway);
-    items.push(proxy);
-    items.push(http_cn);
-    items.push(http_global);
-    items.push(ipv6);
+
+    // 按完成顺序等待，Table 模式下实时输出
+    while let Some(result) = tasks.join_next().await {
+        if let Ok(item) = result {
+            if mode == OutputMode::Table {
+                let symbol = if item.ok && !item.warning {
+                    "✅".green()
+                } else if item.warning {
+                    "⚠️ ".yellow()
+                } else {
+                    "❌".red()
+                };
+                println!("  {} [{}] {}", symbol, item.check.dimmed(), item.message);
+            }
+            items.push(item);
+        }
+    }
 
     let elapsed = start.elapsed();
     let timestamp = current_timestamp();
@@ -65,44 +84,27 @@ pub async fn run(mode: OutputMode) {
         return;
     }
 
-    // 表格输出
     println!();
-    println!("{}  {}", t("diag.title").bold(), timestamp.cyan());
-    println!();
-
-    for item in &items {
-        let symbol = if item.ok && !item.warning {
-            "✅"
-        } else if item.warning {
-            "⚠️ "
-        } else {
-            "❌"
-        };
-        let colored = if item.ok && !item.warning {
-            symbol.green()
-        } else if item.warning {
-            symbol.yellow()
-        } else {
-            symbol.red()
-        };
-        println!("  {} [{}] {}", colored, item.check, item.message);
-    }
-
-    println!();
-    println!("  {}", t("diag.elapsed").replace("{0}", &format!("{:.1}", elapsed.as_secs_f64())));
+    println!(
+        "  {}",
+        t("diag.elapsed").replace("{0}", &format!("{:.1}", elapsed.as_secs_f64()))
+    );
 }
 
 /// 检测出口
 async fn check_egress() -> DiagItem {
     let interfaces = crate::info::get_all_interfaces();
     let egress_ip = crate::info::egress::detect_egress_ip();
-    let egress_iface = egress_ip.and_then(|ip| crate::info::egress::find_egress_interface(&ip, &interfaces));
+    let egress_iface =
+        egress_ip.and_then(|ip| crate::info::egress::find_egress_interface(&ip, &interfaces));
 
     match (egress_iface, egress_ip) {
         (Some(name), Some(ip)) => {
             let iface = interfaces.iter().find(|i| i.name == name);
             let iftype = iface
-                .map(|i| crate::info::interface::classify_interface(&i.description, &i.name).to_label())
+                .map(|i| {
+                    crate::info::interface::classify_interface(&i.description, &i.name).to_label()
+                })
                 .unwrap_or_default();
             DiagItem {
                 check: t("diag.check_egress"),
@@ -126,12 +128,16 @@ async fn check_dns_single(domain: &str) -> DiagItem {
     use trust_dns_resolver::TokioAsyncResolver;
 
     let is_cn = domain == "baidu.com";
-    let check_label = if is_cn { "diag.dns_cn" } else { "diag.dns_global" };
+    let check_label = if is_cn {
+        "diag.dns_cn"
+    } else {
+        "diag.dns_global"
+    };
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
     let start = Instant::now();
 
-    match resolver.lookup_ip(domain).await {
-        Ok(ips) => {
+    match tokio::time::timeout(DIAG_DNS_TIMEOUT, resolver.lookup_ip(domain)).await {
+        Ok(Ok(ips)) => {
             if let Some(ip) = ips.iter().next() {
                 let elapsed = start.elapsed().as_secs_f64() * 1000.0;
                 let msg = t("diag.dns_ok")
@@ -153,11 +159,17 @@ async fn check_dns_single(domain: &str) -> DiagItem {
                 }
             }
         }
-        Err(e) => DiagItem {
+        Ok(Err(e)) => DiagItem {
             check: t(check_label),
             ok: false,
             warning: false,
             message: t1("diag.dns_fail", &e.to_string()),
+        },
+        Err(_) => DiagItem {
+            check: t(check_label),
+            ok: false,
+            warning: false,
+            message: t1("diag.dns_fail", "timeout"),
         },
     }
 }
@@ -177,29 +189,38 @@ async fn check_gateway() -> DiagItem {
     let gw_ip = &routes[0].0;
     let gw_addr: std::net::IpAddr = match gw_ip.parse() {
         Ok(ip) => ip,
-        Err(_) => return DiagItem {
-            check: t("diag.check_gateway"),
-            ok: false,
-            warning: false,
-            message: t("diag.gw_fail"),
-        },
+        Err(_) => {
+            return DiagItem {
+                check: t("diag.check_gateway"),
+                ok: false,
+                warning: false,
+                message: t("diag.gw_fail"),
+            }
+        }
     };
 
     // 用 surge-ping 测网关
     use surge_ping::{Client, ConfigBuilder, PingIdentifier, PingSequence};
     let client = match Client::new(&ConfigBuilder::default().build()) {
         Ok(c) => c,
-        Err(_) => return DiagItem {
-            check: t("diag.check_gateway"),
-            ok: true,
-            warning: true,
-            message: t1("diag.gw_ok_no_rtt", gw_ip),
-        },
+        Err(_) => {
+            return DiagItem {
+                check: t("diag.check_gateway"),
+                ok: true,
+                warning: true,
+                message: t1("diag.gw_ok_no_rtt", gw_ip),
+            }
+        }
     };
 
     let mut pinger = client.pinger(gw_addr, PingIdentifier(0)).await;
-    match pinger.ping(PingSequence(0), &[0u8; 32]).await {
-        Ok((_, rtt)) => {
+    match tokio::time::timeout(
+        DIAG_GATEWAY_TIMEOUT,
+        pinger.ping(PingSequence(0), &[0u8; 32]),
+    )
+    .await
+    {
+        Ok(Ok((_, rtt))) => {
             let ms = rtt.as_secs_f64() * 1000.0;
             DiagItem {
                 check: t("diag.check_gateway"),
@@ -208,7 +229,7 @@ async fn check_gateway() -> DiagItem {
                 message: t2("diag.gw_ok", gw_ip, &format!("{:.1}", ms)),
             }
         }
-        Err(_) => DiagItem {
+        Ok(Err(_)) | Err(_) => DiagItem {
             check: t("diag.check_gateway"),
             ok: false,
             warning: false,
@@ -226,18 +247,16 @@ fn check_proxy_status() -> DiagItem {
     let not_set = t("common.not_set");
 
     // 找系统代理（值不是 "disabled"）
-    let system_proxy = proxies.iter().find(|p| {
-        p.ptype == sys_label && p.value != disabled
-    });
+    let system_proxy = proxies
+        .iter()
+        .find(|p| p.ptype == sys_label && p.value != disabled);
 
     // 找环境变量代理（非系统代理、非环境变量占位行、值不是 "not set"）
-    let env_proxy = proxies.iter().find(|p| {
-        p.ptype != sys_label && p.ptype != env_label && p.value != not_set
-    });
+    let env_proxy = proxies
+        .iter()
+        .find(|p| p.ptype != sys_label && p.ptype != env_label && p.value != not_set);
 
-    let proxy_value = system_proxy
-        .or(env_proxy)
-        .map(|p| p.value.clone());
+    let proxy_value = system_proxy.or(env_proxy).map(|p| p.value.clone());
 
     match proxy_value {
         Some(val) => DiagItem {
@@ -258,7 +277,11 @@ fn check_proxy_status() -> DiagItem {
 /// 检测单个 URL 的 HTTP 连通性（自动检测并使用系统代理）
 async fn check_http_single(url: &str) -> DiagItem {
     let is_cn = url.contains("baidu.com");
-    let check_label = if is_cn { "diag.http_cn" } else { "diag.http_global" };
+    let check_label = if is_cn {
+        "diag.http_cn"
+    } else {
+        "diag.http_global"
+    };
     let timeout_secs = 5;
 
     // 检测系统代理
@@ -269,9 +292,10 @@ async fn check_http_single(url: &str) -> DiagItem {
     let client = if let Some(ref proxy_url) = proxy_addr {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
-            .proxy(reqwest::Proxy::all(proxy_url).unwrap_or_else(|_| {
-                reqwest::Proxy::all("http://0.0.0.0:0").unwrap()
-            }))
+            .proxy(
+                reqwest::Proxy::all(proxy_url)
+                    .unwrap_or_else(|_| reqwest::Proxy::all("http://0.0.0.0:0").unwrap()),
+            )
             .build()
             .unwrap_or_else(|_| {
                 reqwest::Client::builder()
@@ -319,11 +343,7 @@ async fn check_http_single(url: &str) -> DiagItem {
             } else {
                 t("diag.direct")
             };
-            let msg = format!(
-                "{} [{}]",
-                t1("diag.http_fail", &e.to_string()),
-                proxy_tag
-            );
+            let msg = format!("{} [{}]", t1("diag.http_fail", &e.to_string()), proxy_tag);
             DiagItem {
                 check: t(check_label),
                 ok: false,
@@ -341,8 +361,8 @@ async fn check_ipv6() -> DiagItem {
 
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
-    match resolver.ipv6_lookup("baidu.com").await {
-        Ok(ips) => {
+    match tokio::time::timeout(DIAG_IPV6_TIMEOUT, resolver.ipv6_lookup("baidu.com")).await {
+        Ok(Ok(ips)) => {
             if ips.iter().next().is_some() {
                 DiagItem {
                     check: t("diag.check_ipv6"),
@@ -359,7 +379,7 @@ async fn check_ipv6() -> DiagItem {
                 }
             }
         }
-        Err(_) => DiagItem {
+        Ok(Err(_)) | Err(_) => DiagItem {
             check: t("diag.check_ipv6"),
             ok: false,
             warning: false,
@@ -381,7 +401,10 @@ fn current_timestamp() -> String {
     let sec = secs % 60;
     // 粗略日期（从 1970-01-01 起）
     let (year, month, day) = days_to_date(days as i64);
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hour, min, sec)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year, month, day, hour, min, sec
+    )
 }
 
 /// 天数转日期（从 1970-01-01）

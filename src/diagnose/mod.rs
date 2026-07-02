@@ -32,6 +32,7 @@ const PING_COUNT: u32 = 2;
 const TCP_TIMEOUT: Duration = Duration::from_secs(3);
 const HTTPS_TIMEOUT: Duration = Duration::from_secs(5);
 const TRACE_MAX_HOPS: u32 = 10;
+const TRACE_HOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 执行全链路诊断
 pub async fn run(host: &str, mode: OutputMode) {
@@ -53,7 +54,9 @@ pub async fn run(host: &str, mode: OutputMode) {
     let conclusion = derive_conclusion(&steps);
 
     let elapsed = start.elapsed();
-    let target = target_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "N/A".to_string());
+    let target = target_ip
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
 
     let report = DiagnoseReport {
         host: host.to_string(),
@@ -94,7 +97,10 @@ pub async fn run(host: &str, mode: OutputMode) {
     println!("  {}", t1("diagnose.conclusion_chain", &chain).dimmed());
 
     println!();
-    println!("  {}", t1("diagnose.elapsed", &format!("{:.1}", elapsed.as_secs_f64())));
+    println!(
+        "  {}",
+        t1("diagnose.elapsed", &format!("{:.1}", elapsed.as_secs_f64()))
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -113,11 +119,21 @@ async fn check_dns(host: &str) -> DiagStep {
                 .replace("{0}", host)
                 .replace("{1}", &ip.to_string())
                 .replace("{2}", &format!("{:.0}", elapsed));
-            DiagStep { check, ok: true, warning: false, message: msg }
+            DiagStep {
+                check,
+                ok: true,
+                warning: false,
+                message: msg,
+            }
         }
         None => {
             let msg = t1("diagnose.dns_fail", host);
-            DiagStep { check, ok: false, warning: false, message: msg }
+            DiagStep {
+                check,
+                ok: false,
+                warning: false,
+                message: msg,
+            }
         }
     }
 }
@@ -139,10 +155,11 @@ async fn check_ping(host: &str) -> DiagStep {
     };
 
     // ICMP 优先，失败回退 TCP
-    let probes = match crate::ping::surge_ping_probe(target, PING_COUNT, Duration::from_secs(2)).await {
-        Some(r) => r,
-        None => crate::ping::tcp_ping_probe(target, PING_COUNT, Duration::from_secs(2)).await,
-    };
+    let probes =
+        match crate::ping::surge_ping_probe(target, PING_COUNT, Duration::from_secs(2)).await {
+            Some(r) => r,
+            None => crate::ping::tcp_ping_probe(target, PING_COUNT, Duration::from_secs(2)).await,
+        };
 
     let success_count = probes.iter().filter(|p| p.success).count();
     let total = probes.len();
@@ -157,21 +174,35 @@ async fn check_ping(host: &str) -> DiagStep {
     let avg = stats.avg_ms.unwrap_or(0.0);
 
     if success_count == 0 {
-        let msg = t("diagnose.ping_fail")
-            .replace("{0}", &target.to_string());
-        DiagStep { check, ok: false, warning: false, message: msg }
+        let msg = t("diagnose.ping_fail").replace("{0}", &target.to_string());
+        DiagStep {
+            check,
+            ok: false,
+            warning: false,
+            message: msg,
+        }
     } else if loss_rate > 0.0 {
         let msg = t("diagnose.ping_ok")
             .replace("{0}", &target.to_string())
             .replace("{1}", &format!("{:.0}", avg))
             .replace("{2}", &format!("{:.0}", loss_rate));
-        DiagStep { check, ok: true, warning: true, message: msg }
+        DiagStep {
+            check,
+            ok: true,
+            warning: true,
+            message: msg,
+        }
     } else {
         let msg = t("diagnose.ping_ok")
             .replace("{0}", &target.to_string())
             .replace("{1}", &format!("{:.0}", avg))
             .replace("{2}", &format!("{:.0}", loss_rate));
-        DiagStep { check, ok: true, warning: false, message: msg }
+        DiagStep {
+            check,
+            ok: true,
+            warning: false,
+            message: msg,
+        }
     }
 }
 
@@ -183,24 +214,39 @@ async fn check_tcp(host: &str) -> DiagStep {
     let addr = format!("{}:{}", host, port);
     let start = Instant::now();
 
-    let result = tokio::time::timeout(
-        TCP_TIMEOUT,
-        tokio::net::TcpStream::connect(&addr),
-    ).await;
+    let result = tokio::time::timeout(TCP_TIMEOUT, tokio::net::TcpStream::connect(&addr)).await;
 
     match result {
         Ok(Ok(_stream)) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
             let msg = t("diagnose.tcp_ok").replace("{0}", &format!("{:.0}", elapsed));
-            DiagStep { check, ok: true, warning: false, message: msg }
+            DiagStep {
+                check,
+                ok: true,
+                warning: false,
+                message: msg,
+            }
         }
         Ok(Err(e)) => {
             let msg = t1("diagnose.tcp_fail", &e.to_string());
-            DiagStep { check, ok: false, warning: false, message: msg }
+            DiagStep {
+                check,
+                ok: false,
+                warning: false,
+                message: msg,
+            }
         }
         Err(_) => {
-            let msg = t1("diagnose.tcp_fail", &format!("timeout ({}s)", TCP_TIMEOUT.as_secs()));
-            DiagStep { check, ok: false, warning: false, message: msg }
+            let msg = t1(
+                "diagnose.tcp_fail",
+                &format!("timeout ({}s)", TCP_TIMEOUT.as_secs()),
+            );
+            DiagStep {
+                check,
+                ok: false,
+                warning: false,
+                message: msg,
+            }
         }
     }
 }
@@ -213,7 +259,11 @@ async fn check_https(host: &str) -> DiagStep {
     // 检测系统代理
     let proxy_addr = crate::util::get_system_proxy_addr();
     let via_proxy = proxy_addr.is_some();
-    let proxy_tag = if via_proxy { t("diagnose.via_proxy") } else { t("diagnose.no_proxy") };
+    let proxy_tag = if via_proxy {
+        t("diagnose.via_proxy")
+    } else {
+        t("diagnose.no_proxy")
+    };
 
     let mut builder = reqwest::Client::builder().timeout(HTTPS_TIMEOUT).no_proxy();
     if let Some(ref proxy_url) = proxy_addr {
@@ -245,7 +295,12 @@ async fn check_https(host: &str) -> DiagStep {
             let msg = t("diagnose.https_fail")
                 .replace("{0}", &e.to_string())
                 .replace("{1}", &proxy_tag);
-            DiagStep { check, ok: false, warning: false, message: msg }
+            DiagStep {
+                check,
+                ok: false,
+                warning: false,
+                message: msg,
+            }
         }
     }
 }
@@ -307,10 +362,20 @@ async fn check_trace(_host: &str, target_ip: Option<IpAddr>) -> DiagStep {
 
     if reached {
         let msg = t("diagnose.trace_reached").replace("{0}", &hops_reached.to_string());
-        DiagStep { check, ok: true, warning: false, message: msg }
+        DiagStep {
+            check,
+            ok: true,
+            warning: false,
+            message: msg,
+        }
     } else {
         let msg = t("diagnose.trace_not_reached").replace("{0}", &TRACE_MAX_HOPS.to_string());
-        DiagStep { check, ok: false, warning: true, message: msg }
+        DiagStep {
+            check,
+            ok: false,
+            warning: true,
+            message: msg,
+        }
     }
 }
 
@@ -330,7 +395,7 @@ async fn trace_hop_simple(target: std::net::Ipv4Addr, ttl: u32) -> SimpleHop {
         Err(_) => return SimpleHop { reached: false },
     };
     let _ = socket.set_ttl_v4(ttl);
-    let _ = socket.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = socket.set_read_timeout(Some(TRACE_HOP_TIMEOUT));
 
     let ident = (std::process::id() & 0xFFFF) as u16;
     let seq = (ttl * 10) as u16;
@@ -341,8 +406,9 @@ async fn trace_hop_simple(target: std::net::Ipv4Addr, ttl: u32) -> SimpleHop {
         return SimpleHop { reached: false };
     }
 
+    let start = Instant::now();
     let mut buf = [MaybeUninit::new(0); 1024];
-    loop {
+    while start.elapsed() < TRACE_HOP_TIMEOUT {
         match socket.recv_from(&mut buf) {
             Ok((len, from)) => {
                 let from_ip = match from.as_socket() {
@@ -352,12 +418,16 @@ async fn trace_hop_simple(target: std::net::Ipv4Addr, ttl: u32) -> SimpleHop {
                 let data: &[u8] =
                     unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len) };
                 if crate::icmp::parse_icmp_response(data, ident, seq).is_some() {
-                    return SimpleHop { reached: from_ip == IpAddr::V4(target) };
+                    return SimpleHop {
+                        reached: from_ip == IpAddr::V4(target),
+                    };
                 }
             }
             Err(_) => return SimpleHop { reached: false },
         }
     }
+
+    SimpleHop { reached: false }
 }
 
 // ═══════════════════════════════════════════════════════════════

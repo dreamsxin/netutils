@@ -272,6 +272,7 @@ fn build_dict() -> HashMap<&'static str, [&'static str; 2]> {
 
         // ── diag ──
         ("diag.title", "🔍 网络诊断报告", "🔍 Network Diagnostics"),
+        ("diag.running", "正在检测", "Running diagnostics"),
         ("diag.elapsed", "诊断耗时: {0}s", "Time: {0}s"),
         ("diag.check_egress", "出口", "Egress"),
         ("diag.check_gateway", "网关", "Gateway"),

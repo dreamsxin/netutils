@@ -2,6 +2,11 @@
 
 use serde::Serialize;
 use std::net::IpAddr;
+use std::time::Duration;
+
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// 延迟统计
 #[derive(Debug, Clone, Serialize)]
@@ -22,9 +27,9 @@ pub async fn resolve_host(host: &str) -> Option<IpAddr> {
     use trust_dns_resolver::TokioAsyncResolver;
 
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
-    match resolver.lookup_ip(host).await {
-        Ok(ips) => ips.iter().next(),
-        Err(_) => None,
+    match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, resolver.lookup_ip(host)).await {
+        Ok(Ok(ips)) => ips.iter().next(),
+        Ok(Err(_)) | Err(_) => None,
     }
 }
 
@@ -123,6 +128,57 @@ pub fn parse_ports(input: &str) -> Vec<u16> {
     ports
 }
 
+#[cfg(target_os = "windows")]
+pub fn powershell_output(script: &str, timeout: Duration) -> Option<std::process::Output> {
+    command_output_timeout(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        timeout,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn command_output_timeout(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(COMMAND_POLL_INTERVAL),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,7 +195,10 @@ mod tests {
 
     #[test]
     fn test_parse_ports_mixed() {
-        assert_eq!(parse_ports("80-82,443,8080-8081"), vec![80, 81, 82, 443, 8080, 8081]);
+        assert_eq!(
+            parse_ports("80-82,443,8080-8081"),
+            vec![80, 81, 82, 443, 8080, 8081]
+        );
     }
 
     #[test]

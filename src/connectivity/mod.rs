@@ -50,9 +50,28 @@ pub struct CheckStats {
 }
 
 /// 执行连通性测试
-pub async fn run(target: &str, count: u32, timeout: Duration, timing: bool, proxy: Option<String>, no_proxy: bool, concurrency: usize, mode: OutputMode) {
+pub async fn run(
+    target: &str,
+    count: u32,
+    timeout: Duration,
+    timing: bool,
+    proxy: Option<String>,
+    no_proxy: bool,
+    concurrency: usize,
+    mode: OutputMode,
+) {
     if target.starts_with("http://") || target.starts_with("https://") {
-        run_http(target, count, timeout, timing, proxy, no_proxy, concurrency, mode).await;
+        run_http(
+            target,
+            count,
+            timeout,
+            timing,
+            proxy,
+            no_proxy,
+            concurrency,
+            mode,
+        )
+        .await;
     } else {
         run_tcp(target, count, timeout, mode).await;
     }
@@ -206,7 +225,16 @@ async fn run_tcp(target: &str, count: u32, connect_timeout: Duration, mode: Outp
 }
 
 /// HTTP 连通性测试（自动检测并使用系统代理）
-async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool, proxy: Option<String>, no_proxy: bool, concurrency: usize, mode: OutputMode) {
+async fn run_http(
+    url: &str,
+    count: u32,
+    connect_timeout: Duration,
+    timing: bool,
+    proxy: Option<String>,
+    no_proxy: bool,
+    concurrency: usize,
+    mode: OutputMode,
+) {
     // 确定代理：--proxy 优先 > --no-proxy 强制直连 > 系统自动检测
     let proxy_addr = if let Some(ref p) = proxy {
         Some(p.clone())
@@ -223,7 +251,12 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
         match parse_proxy_host_port(proxy_url) {
             Some((host, port)) => {
                 let addr = format!("{}:{}", host, port);
-                match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(&addr)).await {
+                match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    tokio::net::TcpStream::connect(&addr),
+                )
+                .await
+                {
                     Ok(Ok(_)) => {} // 代理端口可达，继续
                     _ => {
                         let msg = format!("代理不可达: {}", proxy_url);
@@ -249,7 +282,9 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
         }
     }
 
-    let mut builder = reqwest::Client::builder().timeout(connect_timeout).no_proxy();
+    let mut builder = reqwest::Client::builder()
+        .timeout(connect_timeout)
+        .no_proxy();
 
     if let Some(ref proxy_url) = proxy_addr {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
@@ -329,7 +364,11 @@ async fn run_http(url: &str, count: u32, connect_timeout: Duration, timing: bool
     let stats = compute_stats(&probes);
     let output = CheckOutput {
         target: url.to_string(),
-        check_type: if is_concurrent { "http-concurrent".to_string() } else { "http".to_string() },
+        check_type: if is_concurrent {
+            "http-concurrent".to_string()
+        } else {
+            "http".to_string()
+        },
         probes: probes.clone(),
         stats: stats.clone(),
     };
@@ -388,14 +427,27 @@ async fn run_http_single(client: &reqwest::Client, url: &str, _i: u32, _count: u
 fn print_probe(probe: &CheckProbe, i: u32, count: u32, proxy_tag: &str) {
     if probe.success {
         let status = probe.status_code.unwrap_or(0);
-        let symbol = if (200..300).contains(&status) { "✓".green() } else { "⚠".yellow() };
+        let symbol = if (200..300).contains(&status) {
+            "✓".green()
+        } else {
+            "⚠".yellow()
+        };
         println!(
             "  [{}/{}] {} {}  {:.2}ms{}",
-            i + 1, count, symbol, status, probe.rtt_ms, proxy_tag
+            i + 1,
+            count,
+            symbol,
+            status,
+            probe.rtt_ms,
+            proxy_tag
         );
         if let Some(ref tm) = probe.timing {
             println!("    {:<10} {:.2}ms", t("check.timing_dns"), tm.dns_ms);
-            println!("    {:<10} {:.2}ms", t("check.timing_connect"), tm.connect_ms);
+            println!(
+                "    {:<10} {:.2}ms",
+                t("check.timing_connect"),
+                tm.connect_ms
+            );
             println!("    {:<10} {:.2}ms", t("check.timing_tls"), tm.tls_ms);
             println!("    {:<10} {:.2}ms", t("check.timing_ttfb"), tm.ttfb_ms);
             println!("    {:<10} {:.2}ms", t("check.timing_total"), tm.total_ms);
@@ -404,7 +456,15 @@ fn print_probe(probe: &CheckProbe, i: u32, count: u32, proxy_tag: &str) {
         let msg = probe.error.as_deref().unwrap_or("unknown");
         println!(
             "  {}",
-            format!("[{}/{}] ✗ {}  {:.2}ms{}", i + 1, count, msg, probe.rtt_ms, proxy_tag).red()
+            format!(
+                "[{}/{}] ✗ {}  {:.2}ms{}",
+                i + 1,
+                count,
+                msg,
+                probe.rtt_ms,
+                proxy_tag
+            )
+            .red()
         );
     }
 }
@@ -414,7 +474,11 @@ fn print_concurrent_stats(probes: &[CheckProbe], concurrency: usize) {
     println!();
     let success = probes.iter().filter(|p| p.success).count();
     let total = probes.len();
-    let rtts: Vec<f64> = probes.iter().filter(|p| p.success).map(|p| p.rtt_ms).collect();
+    let rtts: Vec<f64> = probes
+        .iter()
+        .filter(|p| p.success)
+        .map(|p| p.rtt_ms)
+        .collect();
 
     let h_metric = t("common.metric");
     let h_value = t("proxy.value");
@@ -444,7 +508,13 @@ fn print_concurrent_stats(probes: &[CheckProbe], concurrency: usize) {
 }
 
 /// 手动分步计时 HTTPS 请求（DNS → TCP → TLS → TTFB）
-async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32, count: u32) -> CheckProbe {
+async fn run_http_timing(
+    url: &str,
+    timeout: Duration,
+    mode: OutputMode,
+    i: u32,
+    count: u32,
+) -> CheckProbe {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
@@ -462,7 +532,11 @@ async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32,
         }
     };
 
-    let path = url.split("://").nth(1).and_then(|s| s.find('/').map(|idx| &s[idx..])).unwrap_or("/");
+    let path = url
+        .split("://")
+        .nth(1)
+        .and_then(|s| s.find('/').map(|idx| &s[idx..]))
+        .unwrap_or("/");
 
     let t0 = Instant::now();
 
@@ -520,11 +594,13 @@ async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32,
     let root_store = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect(),
     };
-    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
     let connector = TlsConnector::from(std::sync::Arc::new(config));
 
     let server_name = match rustls::pki_types::ServerName::try_from(host.clone()) {
@@ -544,23 +620,38 @@ async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32,
         }
     };
 
-    let tls_stream = match connector.connect(server_name, tcp_stream).await {
-        Ok(s) => s,
-        Err(e) => {
-            return CheckProbe {
-                success: false,
-                rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
-                status_code: None,
-                error: Some(format!("TLS: {}", e)),
-                timing: Some(TimingBreakdown {
-                    dns_ms,
-                    connect_ms,
-                    tls_ms: t2.elapsed().as_secs_f64() * 1000.0,
-                    ..Default::default()
-                }),
-            };
-        }
-    };
+    let tls_stream =
+        match tokio::time::timeout(timeout, connector.connect(server_name, tcp_stream)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                return CheckProbe {
+                    success: false,
+                    rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    status_code: None,
+                    error: Some(format!("TLS: {}", e)),
+                    timing: Some(TimingBreakdown {
+                        dns_ms,
+                        connect_ms,
+                        tls_ms: t2.elapsed().as_secs_f64() * 1000.0,
+                        ..Default::default()
+                    }),
+                };
+            }
+            Err(_) => {
+                return CheckProbe {
+                    success: false,
+                    rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    status_code: None,
+                    error: Some("TLS: timeout".to_string()),
+                    timing: Some(TimingBreakdown {
+                        dns_ms,
+                        connect_ms,
+                        tls_ms: t2.elapsed().as_secs_f64() * 1000.0,
+                        ..Default::default()
+                    }),
+                };
+            }
+        };
     let tls_ms = t2.elapsed().as_secs_f64() * 1000.0;
 
     // ④ TTFB: 发送 HTTP GET，读取响应
@@ -571,31 +662,62 @@ async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32,
         path, host
     );
 
-    if tls_stream.write_all(request.as_bytes()).await.is_err() {
-        return CheckProbe {
-            success: false,
-            rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
-            status_code: None,
-            error: Some("HTTP: write failed".to_string()),
-            timing: Some(TimingBreakdown {
-                dns_ms,
-                connect_ms,
-                tls_ms,
-                ..Default::default()
-            }),
-        };
+    match tokio::time::timeout(timeout, tls_stream.write_all(request.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => {
+            return CheckProbe {
+                success: false,
+                rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                status_code: None,
+                error: Some("HTTP: write failed".to_string()),
+                timing: Some(TimingBreakdown {
+                    dns_ms,
+                    connect_ms,
+                    tls_ms,
+                    ..Default::default()
+                }),
+            };
+        }
+        Err(_) => {
+            return CheckProbe {
+                success: false,
+                rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                status_code: None,
+                error: Some("HTTP: write timeout".to_string()),
+                timing: Some(TimingBreakdown {
+                    dns_ms,
+                    connect_ms,
+                    tls_ms,
+                    ..Default::default()
+                }),
+            };
+        }
     }
 
     // 读取响应（至少读取状态行）
     let mut buf = [0u8; 4096];
-    let n = match tls_stream.read(&mut buf).await {
-        Ok(n) => n,
-        Err(e) => {
+    let n = match tokio::time::timeout(timeout, tls_stream.read(&mut buf)).await {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
             return CheckProbe {
                 success: false,
                 rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
                 status_code: None,
                 error: Some(format!("HTTP: {}", e)),
+                timing: Some(TimingBreakdown {
+                    dns_ms,
+                    connect_ms,
+                    tls_ms,
+                    ..Default::default()
+                }),
+            };
+        }
+        Err(_) => {
+            return CheckProbe {
+                success: false,
+                rtt_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                status_code: None,
+                error: Some("HTTP: read timeout".to_string()),
                 timing: Some(TimingBreakdown {
                     dns_ms,
                     connect_ms,
@@ -627,7 +749,11 @@ async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32,
     };
 
     if mode == OutputMode::Table {
-        let symbol = if is_success { "✓".green() } else { "⚠".yellow() };
+        let symbol = if is_success {
+            "✓".green()
+        } else {
+            "⚠".yellow()
+        };
         println!(
             "  [{}/{}] {} {}  {:.2}ms",
             i + 1,
@@ -656,7 +782,11 @@ async fn run_http_timing(url: &str, timeout: Duration, mode: OutputMode, i: u32,
 fn compute_stats(probes: &[CheckProbe]) -> CheckStats {
     let total = probes.len();
     let success = probes.iter().filter(|p| p.success).count();
-    let rtts: Vec<f64> = probes.iter().filter(|p| p.success).map(|p| p.rtt_ms).collect();
+    let rtts: Vec<f64> = probes
+        .iter()
+        .filter(|p| p.success)
+        .map(|p| p.rtt_ms)
+        .collect();
     let stats = crate::util::compute_stats(&rtts);
 
     CheckStats {

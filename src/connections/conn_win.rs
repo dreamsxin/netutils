@@ -1,8 +1,10 @@
 //! Windows 网络连接实现（PowerShell Get-NetTCPConnection）。
 
-use std::process::Command;
+use std::time::Duration;
 
 use super::ConnectionInfo;
+
+const POWERSHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 获取所有 TCP/UDP 连接
 pub fn get_connections() -> Vec<ConnectionInfo> {
@@ -26,7 +28,7 @@ Get-NetUDPEndpoint -ErrorAction SilentlyContinue | ForEach-Object {
 }
 "#;
 
-    if let Ok(output) = Command::new("powershell").args(["-Command", ps_script]).output() {
+    if let Some(output) = crate::util::powershell_output(ps_script, POWERSHELL_TIMEOUT) {
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
             let line = line.trim();
@@ -44,7 +46,11 @@ Get-NetUDPEndpoint -ErrorAction SilentlyContinue | ForEach-Object {
             } else {
                 format!("{}:{}", parts[2], parts[3])
             };
-            let state = if parts[4] == "*" { "*".to_string() } else { parts[4].to_string() };
+            let state = if parts[4] == "*" {
+                "*".to_string()
+            } else {
+                parts[4].to_string()
+            };
             let pid: u32 = parts[5].parse().unwrap_or(0);
             let process_name = parts[6].to_string();
             let protocol = parts[7].to_string();
