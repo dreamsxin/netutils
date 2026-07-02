@@ -2,6 +2,15 @@
 
 本文件记录 netutils-cli 的版本变更。
 
+## [0.3.5] - 2026-07-02
+
+### 修复
+- Windows `iface` 改用 CIM 采集接口信息，避免 `Get-NetAdapter` 长时间阻塞导致命令无响应
+- Windows PowerShell 采集命令增加非交互模式和进程级超时，避免外部命令卡住主程序
+- 修复 `scan --concurrency 0` 永久等待的问题
+- 为 DNS、ICMP ping、traceroute、HTTPS timing 等网络探测补充超时边界
+- `diag` 按任务完成顺序输出结果，避免慢任务阻塞已完成检测项
+
 ## [0.3.1] - 未发布
 
 ### 新增
